@@ -62,3 +62,9 @@ htmlcov/
 
 # Uploads
 uploads/
+
+PROJECT.md
+CURRENT_STATE.md
+TASK.md
+DECISIONS.md
+PROJECT_METRICS.md
