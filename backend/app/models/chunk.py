@@ -38,6 +38,10 @@ class Chunk(Base):
     embedding = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
 
     document = relationship("Document", back_populates="chunks")
+    retrieval_results = relationship(
+        "RetrievalResult",
+        back_populates="chunk",
+    )
 
     __table_args__ = (
         Index("idx_chunks_document_index", "document_id", "chunk_index"),

@@ -8,6 +8,7 @@ from app.config import settings
 engine = create_async_engine(
     settings.database_url,
     echo=False,
+    pool_pre_ping=True,
 )
 
 async_session_maker = async_sessionmaker(
@@ -19,18 +20,18 @@ async_session_maker = async_sessionmaker(
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """Yield a session. Routes own commit/rollback explicitly.
+    """Yield a session and close it when the request ends.
 
-    - Write routes call ``await session.commit()``.
-    - Read routes never commit (implicit txn is rolled back on close).
-    - On exception the session is rolled back before propagating.
+    Does **not** commit or roll back — callers own transactions:
+
+    - Write routes/services call ``await session.commit()`` after successful work.
+    - Write routes call ``await session.rollback()`` before recovery commits when needed.
+    - Read-only routes rely on session close to roll back the implicit transaction.
+
+    Mixing auto-commit inside this dependency with explicit commits in routes is avoided.
     """
     async with async_session_maker() as session:
-        try:
-            yield session
-        except Exception:
-            await session.rollback()
-            raise
+        yield session
 
 
 async def init_db() -> None:

@@ -7,82 +7,42 @@ Last updated: YYYY-MM-DD
 
 ---
 
-## ContextLens
+Last updated: 2026-03-20
 
 ### Dataset / benchmark scale
-- benchmark_datasets:
-- total_queries:
-- total_traced_runs:
-- configs_tested:
+- benchmark_datasets: 1
+- total_queries: 3
+- total_traced_runs: 6
+- configs_tested: 2
 
-### Quality / evaluation
-- failure_categories_supported:
-- classification_agreement:
-- average_faithfulness_score:
-- average_completeness_score:
-- average_retrieval_relevance_score:
-- average_context_coverage_score:
+### Performance (ms; from `runs` latency columns)
+- avg_retrieval_latency_ms: 93.33
+- p95_retrieval_latency_ms: 277.25
+- avg_generation_latency_ms / p95_generation_latency_ms: not available (no measured samples)
+- avg_evaluation_latency_ms: 2.33
+- p95_evaluation_latency_ms: 3.75
+- avg_total_latency_ms: 95.67
+- p95_total_latency_ms: 280.25
 
-### Performance
-- avg_retrieval_latency_ms:
-- p95_retrieval_latency_ms:
-- avg_evaluation_latency_ms:
-- p95_evaluation_latency_ms:
-- avg_end_to_end_latency_ms:
+### Quality / evaluation (from `evaluation_results`)
+- average_faithfulness: not available
+- average_completeness: 1.00
+- average_retrieval_relevance_score: 0.337
+- average_context_coverage_score: 0.40
 
-### Productivity / debugging
-- debugging_time_before_minutes:
-- debugging_time_after_minutes:
-- average_time_to_compare_two_configs_minutes:
+### Failure types (counts)
+- _no failure_type values stored — not available_
 
 ### Cost / efficiency
-- avg_evaluation_cost_per_run_usd:
-- llm_judge_call_rate:
-- hybrid_cost_reduction_percent:
+- avg_evaluation_cost_per_run_usd: not available
+- llm_judge_call_rate: 0
 
-### Notable experiment findings
-- best_chunking_strategy:
-- best_config_by_faithfulness:
-- largest_quality_improvement_found:
-- largest_regression_detected:
+### Ingestion inventory (optional)
+- documents (ingestion): 1
+- chunks (ingestion): 3
 
----
-
-## AgentShield
-
-### Security coverage
-- attack_categories:
-- total_test_cases:
-- workflows_or_configs_scanned:
-- findings_total:
-- findings_high_or_critical:
-
-### Detection quality
-- precision:
-- recall:
-- f1_score:
-- false_positive_rate:
-- false_negative_rate:
-
-### Performance
-- avg_scan_time_seconds:
-- p95_scan_time_seconds:
-- avg_detection_latency_ms:
-
-### Review / workflow impact
-- review_time_before_minutes:
-- review_time_after_minutes:
-- remediation_report_generation_time_seconds:
-
-### Routing / cost
-- rules_only_rate:
-- classifier_only_rate:
-- llm_routing_rate:
-- avg_scan_cost_usd:
-- llm_cost_reduction_percent:
-
-### Notable experiment findings
-- most_common_attack_category:
-- hardest_attack_category_to_detect:
-- best-performing_detection_strategy:
-- biggest_reduction_in_manual_review_time:
+**Measurement notes**
+- Metrics are generated from actual stored benchmark runs and evaluation rows.
+- Current evaluation uses `minimal_retrieval_heuristic_v1`, not an LLM judge.
+- `faithfulness`, `generation latency`, `evaluation cost`, and `failure_type` are not yet populated by the current benchmark workflow.
+- `llm_judge_call_rate` is `0` because the current evaluator does not use an LLM judge.

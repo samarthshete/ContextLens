@@ -2,7 +2,9 @@
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
 
+from app.database import engine
 from tests.conftest import make_upload
 
 BASE = "/api/v1"
@@ -114,12 +116,12 @@ async def test_upload_file_too_large(client: AsyncClient, monkeypatch):
 @pytest.mark.asyncio
 async def test_upload_embedding_failure_marks_failed(client: AsyncClient, monkeypatch):
     """If embed_texts raises, document status must be 'failed'."""
-    from app.services import embedder
+    import app.services.text_document_ingest as ingest
 
     def _boom(texts):
         raise RuntimeError("GPU exploded")
 
-    monkeypatch.setattr(embedder, "embed_texts", _boom)
+    monkeypatch.setattr(ingest, "embed_texts", _boom)
 
     resp = await client.post(
         f"{BASE}/documents",
@@ -132,6 +134,63 @@ async def test_upload_embedding_failure_marks_failed(client: AsyncClient, monkey
     docs = docs_resp.json()
     failed = [d for d in docs if d["status"] == "failed"]
     assert len(failed) == 1
+
+    # No partial chunk rows must exist.
+    async with engine.connect() as conn:
+        n = (await conn.execute(text("SELECT COUNT(*) FROM chunks"))).scalar_one()
+        assert n == 0
+
+
+@pytest.mark.asyncio
+async def test_upload_parse_failure_marks_failed(client: AsyncClient, monkeypatch):
+    """If parse_document raises, document is marked failed and no chunks exist."""
+    import app.services.text_document_ingest as ingest
+
+    def _bad(path):
+        raise ValueError("corrupt PDF")
+
+    monkeypatch.setattr(ingest, "parse_document", _bad)
+
+    resp = await client.post(
+        f"{BASE}/documents",
+        files=make_upload("sample.txt", SAMPLE_TEXT),
+    )
+    assert resp.status_code == 422
+    docs = (await client.get(f"{BASE}/documents")).json()
+    assert any(d["status"] == "failed" for d in docs)
+    async with engine.connect() as conn:
+        n = (await conn.execute(text("SELECT COUNT(*) FROM chunks"))).scalar_one()
+        assert n == 0
+
+
+@pytest.mark.asyncio
+async def test_upload_text_length_limit(client: AsyncClient, monkeypatch):
+    from app import config
+
+    monkeypatch.setattr(config.settings, "max_text_length", 50)
+    long_text = "x" * 200
+    resp = await client.post(
+        f"{BASE}/documents",
+        files=make_upload("long.txt", long_text),
+    )
+    assert resp.status_code == 422
+    assert "limit" in resp.json()["detail"].lower() or "chars" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_upload_chunk_count_limit(client: AsyncClient, monkeypatch):
+    from app import config
+
+    monkeypatch.setattr(config.settings, "max_chunks_per_document", 2)
+    # Many short lines produce many fixed chunks at small chunk_size
+    big = "\n\n".join([f"paragraph {i} with some words." for i in range(50)])
+    resp = await client.post(
+        f"{BASE}/documents",
+        params={"chunk_size": 20, "chunk_overlap": 0},
+        files=make_upload("big.txt", big),
+    )
+    assert resp.status_code == 422
+    assert "chunks" in resp.json()["detail"].lower()
 
 
 # --------------------------------------------------------------------------
@@ -185,3 +244,12 @@ async def test_delete_document_removes_chunks(client: AsyncClient):
     # Chunks gone (document returns 404 so we can't fetch via /documents/X/chunks)
     chunks_after = await client.get(f"{BASE}/documents/{doc_id}/chunks")
     assert chunks_after.status_code == 404
+
+    async with engine.connect() as conn:
+        n = (
+            await conn.execute(
+                text("SELECT COUNT(*) FROM chunks WHERE document_id = :id"),
+                {"id": doc_id},
+            )
+        ).scalar_one()
+        assert n == 0

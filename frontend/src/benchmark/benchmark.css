@@ -1,0 +1,444 @@
+/* ContextLens benchmark UI — uses tokens from index.css */
+
+.cl-app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.25rem 1rem 3rem;
+}
+
+.cl-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.75rem 1.25rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.cl-header h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  color: var(--text-h);
+}
+
+.cl-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.cl-nav button {
+  font: inherit;
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.cl-nav button:hover {
+  border-color: var(--accent-border);
+  color: var(--text-h);
+}
+
+.cl-nav button[data-active='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.cl-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+  margin-bottom: 1rem;
+  background: var(--bg);
+}
+
+.cl-card h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.05rem;
+  color: var(--text-h);
+}
+
+.cl-field {
+  margin-bottom: 0.85rem;
+}
+
+.cl-field label {
+  display: block;
+  font-size: 0.88rem;
+  margin-bottom: 0.25rem;
+  color: var(--text-h);
+}
+
+.cl-field select,
+.cl-field input[type='text'] {
+  width: 100%;
+  max-width: 32rem;
+  font: inherit;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.cl-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.cl-btn {
+  font: inherit;
+  padding: 0.45rem 1rem;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  background: var(--accent);
+  color: #fff;
+}
+
+.cl-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.cl-btn-secondary {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+}
+
+.cl-msg {
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.92rem;
+  margin-top: 0.75rem;
+}
+
+.cl-msg-error {
+  background: rgba(220, 38, 38, 0.12);
+  color: #b91c1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cl-msg-error {
+    color: #fca5a5;
+  }
+}
+
+.cl-msg-ok {
+  background: var(--accent-bg);
+  color: var(--text-h);
+}
+
+.cl-muted {
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+.cl-table-wrap {
+  overflow-x: auto;
+}
+
+.cl-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.cl-table th,
+.cl-table td {
+  text-align: left;
+  padding: 0.45rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.cl-table th {
+  color: var(--text-h);
+  font-weight: 600;
+}
+
+.cl-table button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  font: inherit;
+}
+
+.cl-pre {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  overflow-x: auto;
+  padding: 0.75rem;
+  background: var(--code-bg);
+  border-radius: 8px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.cl-hit {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem;
+  border-left: 3px solid var(--accent-border);
+  background: var(--code-bg);
+  border-radius: 0 6px 6px 0;
+}
+
+.cl-compare-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+@media (min-width: 640px) {
+  .cl-compare-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.cl-check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+}
+
+.cl-loading,
+.cl-loading-inline {
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.cl-loading-inline {
+  margin: 0.25rem 0;
+}
+
+.cl-hint {
+  font-size: 0.88rem;
+  color: var(--text);
+  margin: 0 0 0.5rem;
+}
+
+.cl-empty-banner {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: var(--code-bg);
+  border: 1px dashed var(--border);
+  font-size: 0.92rem;
+  margin-bottom: 1rem;
+}
+
+.cl-empty {
+  margin-top: 0.5rem;
+}
+
+.cl-subsection {
+  margin-bottom: 1.25rem;
+}
+
+.cl-subsection h3 {
+  font-size: 0.95rem;
+  color: var(--text-h);
+  margin: 0 0 0.5rem;
+}
+
+.cl-h3-muted {
+  font-size: 0.92rem;
+  color: var(--text-h);
+  margin: 1rem 0 0.5rem;
+}
+
+.cl-eval-grid {
+  display: grid;
+  gap: 0.35rem;
+  max-width: 36rem;
+}
+
+.cl-eval-row {
+  display: grid;
+  grid-template-columns: 10rem 1fr;
+  gap: 0.5rem;
+  font-size: 0.92rem;
+}
+
+.cl-eval-k {
+  color: var(--text);
+}
+
+.cl-details {
+  margin-top: 0.75rem;
+}
+
+.cl-details summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.88rem;
+}
+
+.cl-meta-dl {
+  margin: 0.5rem 0 0;
+  font-size: 0.82rem;
+}
+
+.cl-meta-dl dt {
+  font-weight: 600;
+  color: var(--text-h);
+  margin-top: 0.35rem;
+}
+
+.cl-meta-dl dd {
+  margin: 0.15rem 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cl-pre-sm {
+  max-height: 140px;
+  margin-top: 0.35rem;
+  font-size: 0.76rem;
+}
+
+.cl-td-wrap {
+  max-width: 12rem;
+  word-break: break-word;
+}
+
+.cl-msg-info {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--text);
+}
+
+.cl-detail-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.cl-stage-label {
+  font-size: 0.92rem;
+}
+
+.cl-run-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  white-space: nowrap;
+}
+
+.cl-run-badge--pending,
+.cl-run-badge--running {
+  border-color: #b8860b;
+  background: rgba(184, 134, 11, 0.12);
+}
+
+.cl-run-badge--retrieval-completed,
+.cl-run-badge--generation-completed {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.cl-run-badge--completed {
+  border-color: #2d6a4f;
+  background: rgba(45, 106, 79, 0.12);
+  color: #1b4332;
+}
+
+.cl-run-badge--failed {
+  border-color: #9b2226;
+  background: rgba(155, 34, 38, 0.1);
+  color: #9b2226;
+}
+
+.cl-pulse {
+  font-size: 0.85rem;
+  color: var(--accent);
+  animation: cl-pulse-opacity 1.2s ease-in-out infinite;
+}
+
+@keyframes cl-pulse-opacity {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Document upload (benchmark run form) */
+.cl-upload-panel {
+  margin: 1rem 0 0.5rem;
+  padding: 0.85rem 1rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.cl-upload-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+  color: var(--text-h);
+}
+
+.cl-upload-hint {
+  margin: 0 0 0.65rem;
+  font-size: 0.82rem;
+}
+
+.cl-upload-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 0.75rem;
+}
+
+.cl-upload-row input[type='file'] {
+  font-size: 0.85rem;
+  max-width: 100%;
+}
+
+.cl-upload-msg {
+  margin-top: 0.65rem;
+  margin-bottom: 0;
+}
+
+.cl-upload-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.cl-spinner {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: cl-spin 0.7s linear infinite;
+}
+
+@keyframes cl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

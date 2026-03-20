@@ -21,8 +21,8 @@ class SearchResultItem(BaseModel):
     score: float = Field(
         ...,
         description=(
-            "Cosine similarity between query and chunk embedding. "
-            "Range: 1.0 = identical, 0.0 = orthogonal, negative = opposing."
+            "Cosine similarity: 1 - (pgvector <=> distance) for L2-normalized embeddings. "
+            "Higher is more similar; typical range roughly [-1, 1]."
         ),
     )
 

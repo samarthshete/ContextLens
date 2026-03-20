@@ -1,73 +1,42 @@
-# React + TypeScript + Vite
+# ContextLens frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + TypeScript + Vite. **Primary screen:** benchmark execution and inspection against the existing FastAPI backend.
 
-Currently, two official plugins are available:
+## Dev setup
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+1. Start PostgreSQL + backend (e.g. `cd backend && uvicorn app.main:app --reload --port 8002`).
+2. `npm install && npm run dev` → [http://localhost:5173](http://localhost:5173)
 
-## React Compiler
+`vite.config.ts` proxies **`/api/*`** to **`BACKEND_PROXY_TARGET`** (default **`http://127.0.0.1:8002`**), so the browser calls **`/api/v1/...`** same-origin (no CORS friction).
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Docker Compose** on host port **8000**: create `frontend/.env.development.local` with  
+  `BACKEND_PROXY_TARGET=http://127.0.0.1:8000`
+- **Bypass proxy** (direct to API; needs CORS):  
+  `VITE_API_BASE=http://127.0.0.1:8002/api/v1 npm run dev`
 
-## Expanding the ESLint configuration
+See **`.env.example`** in this folder.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## What the UI does
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+| Tab | APIs used |
+|-----|-----------|
+| **Run benchmark** | `GET /datasets`, `GET /query-cases?dataset_id=`, `GET /pipeline-configs`, `GET /documents`, `POST /runs` |
+| **Recent runs** | `GET /runs` |
+| **Run detail** | `GET /runs/{id}` |
+| **Config comparison** | `GET /runs/config-comparison` |
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+Seed benchmark data first (`backend/scripts/seed_benchmark.py` + corpus / `run_benchmark` or uploads) so dropdowns are non-empty.
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Build
+
+```bash
+npm run build
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Tests (unit)
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run test
 ```
+
+Covers pure helpers (`formValidation`, API error copy). End-to-end flow: run backend + `npm run dev`, then exercise all tabs against real data.

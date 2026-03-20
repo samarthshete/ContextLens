@@ -4,13 +4,14 @@ Tests run against the real database (requires Docker postgres + pgvector).
 Each test gets a clean slate via the ``cleanup_db`` autouse fixture.
 """
 
+import asyncio
 import io
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
-from app.database import async_session_maker
+from app.database import engine
 from app.main import app
 
 
@@ -26,10 +27,22 @@ async def client():
 async def cleanup_db():
     """Delete all rows after each test so tests are isolated."""
     yield
-    async with async_session_maker() as session:
-        await session.execute(text("DELETE FROM chunks"))
-        await session.execute(text("DELETE FROM documents"))
-        await session.commit()
+    # Let ASGI dependency cleanup finish before grabbing a connection from the pool.
+    await asyncio.sleep(0.01)
+    async with engine.begin() as conn:
+        # Trace / benchmark tables first (FK order), then ingestion.
+        for stmt in (
+            "DELETE FROM evaluation_results",
+            "DELETE FROM retrieval_results",
+            "DELETE FROM generation_results",
+            "DELETE FROM runs",
+            "DELETE FROM query_cases",
+            "DELETE FROM datasets",
+            "DELETE FROM pipeline_configs",
+            "DELETE FROM chunks",
+            "DELETE FROM documents",
+        ):
+            await conn.execute(text(stmt))
 
 
 def make_upload(filename: str, content: str | bytes) -> dict:

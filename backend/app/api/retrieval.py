@@ -12,7 +12,7 @@ router = APIRouter()
 
 @router.post("/search", response_model=SearchResponse)
 async def search(body: SearchRequest, db: AsyncSession = Depends(get_db)):
-    """Semantic search over chunk embeddings."""
+    """Semantic search over chunk embeddings (read-only; no commit)."""
     try:
         results = await search_chunks(
             query=body.query,
@@ -20,9 +20,15 @@ async def search(body: SearchRequest, db: AsyncSession = Depends(get_db)):
             top_k=body.top_k,
             document_id=body.document_id,
         )
+    except OSError as exc:
+        # Model load / disk issues
+        raise HTTPException(
+            status_code=503,
+            detail="Embedding service unavailable.",
+        ) from exc
     except Exception as exc:
         raise HTTPException(
-            status_code=500,
+            status_code=503,
             detail="Search failed. The embedding model may not be loaded.",
         ) from exc
     return SearchResponse(query=body.query, results=results)

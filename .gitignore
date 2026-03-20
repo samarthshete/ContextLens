@@ -2,6 +2,19 @@
 .env
 .env.local
 .env.*.local
+!.env.example
+!**/.env.example
+
+# Private planning docs (keep local only; do not commit)
+PROJECT.md
+DECISIONS.md
+TASK.md
+CURRENT_STATE.md
+
+# Local databases
+*.sqlite
+*.sqlite3
+*.db
 
 # Python
 __pycache__/
@@ -62,9 +75,3 @@ htmlcov/
 
 # Uploads
 uploads/
-
-PROJECT.md
-CURRENT_STATE.md
-TASK.md
-DECISIONS.md
-PROJECT_METRICS.md

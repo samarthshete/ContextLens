@@ -130,3 +130,19 @@ async def test_search_empty_db_returns_empty(client: AsyncClient):
     )
     assert resp.status_code == 200
     assert resp.json()["results"] == []
+
+
+@pytest.mark.asyncio
+async def test_search_embedding_failure_returns_503(client: AsyncClient, monkeypatch):
+    import app.services.retrieval as retrieval_svc
+
+    def _boom(text: str):
+        raise RuntimeError("model not loaded")
+
+    monkeypatch.setattr(retrieval_svc, "embed_text", _boom)
+
+    resp = await client.post(
+        f"{BASE}/retrieval/search",
+        json={"query": "hello", "top_k": 3},
+    )
+    assert resp.status_code == 503

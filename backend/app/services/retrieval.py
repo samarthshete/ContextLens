@@ -15,14 +15,19 @@ async def search_chunks(
 ) -> list[dict]:
     """Embed *query*, find the closest chunks by cosine distance, return top_k.
 
-    Returns a list of dicts with keys:
+    pgvector / SQLAlchemy: ``Chunk.embedding.cosine_distance(q)`` compiles to the
+    ``<=>`` operator with ``vector_cosine_ops`` (see migration ``idx_chunks_embedding_cosine``).
+    For L2-normalized vectors (``normalize_embeddings=True`` in the embedder), this distance
+    is ``1 - cosine_similarity``, so ``score = 1 - distance`` equals **cosine similarity**
+    in ``[-1, 1]`` (typically positive for related text).
+
+    Returns dicts with:
         chunk_id, document_id, content, chunk_index, start_char, end_char, score
     """
     query_vec = embed_text(query)
 
-    # pgvector cosine distance operator: <=> returns distance in [0, 2].
-    # score = 1 - distance  →  1.0 = identical, 0.0 = orthogonal.
     distance = Chunk.embedding.cosine_distance(query_vec)
+    similarity = (1 - distance).label("score")
 
     stmt = (
         select(
@@ -32,7 +37,7 @@ async def search_chunks(
             Chunk.chunk_index,
             Chunk.start_char,
             Chunk.end_char,
-            (1 - distance).label("score"),
+            similarity,
         )
         .where(Chunk.embedding.is_not(None))
         .order_by(distance)
