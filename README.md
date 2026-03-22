@@ -364,6 +364,7 @@ Tests span `e2e/run-detail.spec.ts` (11), `e2e/runs-list.spec.ts` (1), `e2e/queu
 | `docs/DEV_FULL_RUN_QUEUE.md` | Full-mode RQ operations, restart semantics, validation log |
 | `docs/FULL_RAG_EXAMPLE.md` | Full RAG run with generation + LLM judge |
 | `docs/METRICS_INSTRUMENTATION.md` | Metric semantics, evaluator bucketing, N/A vs zero |
+| `docs/DEPLOYMENT.md` | Vercel + Render runbook (`render.yaml`), env map, migrations, smoke checklist |
 | `PROJECT.md` | Architecture, API surface, data model, phase roadmap |
 | `DECISIONS.md` | Engineering constraints and design rationale |
 | `CURRENT_STATE.md` | Verified implementation state per phase |

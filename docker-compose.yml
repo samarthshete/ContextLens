@@ -37,6 +37,10 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-openai}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
+      # Optional: comma-separated browser origins (default in app/config.py if unset)
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      # Optional demo write gate — same value must be entered in the SPA session (see docs/DEPLOYMENT.md)
+      CONTEXTLENS_WRITE_KEY: ${CONTEXTLENS_WRITE_KEY:-}
     ports:
       - "8002:8000"
     depends_on:
@@ -51,18 +55,15 @@ services:
     build:
       context: ./backend
     image: contextlens-backend:latest
-    command:
-      - rq
-      - worker
-      - contextlens_full_run
-      - --url
-      - redis://redis:6379/0
+    command: ["./scripts/rq_worker.sh"]
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/contextlens
       REDIS_URL: redis://redis:6379/0
       LLM_PROVIDER: ${LLM_PROVIDER:-openai}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      CONTEXTLENS_WRITE_KEY: ${CONTEXTLENS_WRITE_KEY:-}
     depends_on:
       db:
         condition: service_healthy

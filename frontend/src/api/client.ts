@@ -1,4 +1,5 @@
 import { API_BASE } from '../config'
+import { getStoredWriteKey } from '../lib/writeKeyStorage'
 import type {
   ConfigComparisonResponse,
   DashboardAnalyticsResponse,
@@ -43,6 +44,21 @@ export class ApiError extends Error {
   }
 }
 
+/** Attach write-key header when set (optional hosted protection). */
+export function writeKeyHeaders(
+  base: Record<string, string>,
+  keyOverride?: string,
+): Record<string, string> {
+  const k = (keyOverride ?? getStoredWriteKey())?.trim()
+  if (!k) return base
+  return { ...base, 'X-ContextLens-Write-Key': k }
+}
+
+export type ApiMetaResponse = {
+  write_protection: boolean
+  app_env: string
+}
+
 async function parseError(res: Response): Promise<string> {
   try {
     const j = (await res.json()) as { detail?: unknown }
@@ -56,18 +72,33 @@ async function parseError(res: Response): Promise<string> {
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`
+  const baseHeaders: Record<string, string> = {
+    Accept: 'application/json',
+    ...(init?.headers as Record<string, string>),
+  }
   const res = await fetch(url, {
     ...init,
-    headers: {
-      Accept: 'application/json',
-      ...(init?.headers as Record<string, string>),
-    },
+    headers: writeKeyHeaders(baseHeaders),
   })
   if (!res.ok) {
     throw new ApiError(res.status, await parseError(res))
   }
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
+}
+
+/** Public capability metadata (same origin as other API calls). */
+export async function fetchApiMeta(): Promise<ApiMetaResponse> {
+  return apiFetch<ApiMetaResponse>('/meta')
+}
+
+/** Check a candidate key before storing in sessionStorage. */
+export async function verifyWriteKey(candidate: string): Promise<boolean> {
+  const res = await fetch(`${API_BASE}/meta/verify-write-key`, {
+    method: 'POST',
+    headers: writeKeyHeaders({ Accept: 'application/json' }, candidate),
+  })
+  return res.ok
 }
 
 async function apiJson<T>(path: string, method: string, body?: unknown): Promise<T> {
@@ -135,7 +166,7 @@ export const api = {
     body.append('file', file)
     const res = await fetch(url, {
       method: 'POST',
-      headers: { Accept: 'application/json' },
+      headers: writeKeyHeaders({ Accept: 'application/json' }),
       body,
     })
     if (!res.ok) {
@@ -148,10 +179,10 @@ export const api = {
     const url = `${API_BASE}/runs`
     const res = await fetch(url, {
       method: 'POST',
-      headers: {
+      headers: writeKeyHeaders({
         Accept: 'application/json',
         'Content-Type': 'application/json',
-      },
+      }),
       body: JSON.stringify({
         ...body,
         document_id: body.document_id ?? undefined,

@@ -109,3 +109,107 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+/* Optional hosted write-key banner (docs/DEPLOYMENT.md) */
+.cl-write-key-banner {
+  background: #fef3c7;
+  color: #78350f;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  border-bottom: 1px solid #fcd34d;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.cl-write-key-banner__btn {
+  font: inherit;
+  cursor: pointer;
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid #b45309;
+  background: #fff;
+  color: #78350f;
+}
+
+.cl-write-key-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.cl-write-key-modal {
+  max-width: 420px;
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem;
+  box-shadow: var(--shadow);
+}
+
+.cl-write-key-modal h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+  color: var(--text-h);
+}
+
+.cl-write-key-modal__hint {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.cl-write-key-modal__label {
+  display: block;
+  font-size: 0.8rem;
+  margin-bottom: 0.25rem;
+  color: var(--text-h);
+}
+
+.cl-write-key-modal__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.cl-write-key-modal__error {
+  color: #b91c1c;
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem;
+}
+
+.cl-write-key-modal__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.cl-write-key-modal__actions button {
+  font: inherit;
+  cursor: pointer;
+  padding: 0.4rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--code-bg);
+  color: var(--text-h);
+}
+
+.cl-write-key-modal__actions button[type='submit'] {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+}

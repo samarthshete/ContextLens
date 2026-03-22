@@ -13,6 +13,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml .
 COPY README.md .
 COPY app ./app
+COPY alembic.ini .
+COPY alembic ./alembic
+COPY scripts ./scripts
+
+RUN chmod +x scripts/rq_worker.sh
 
 # Install package + all [project] dependencies from pyproject.toml (includes ``openai``).
 RUN pip install --no-cache-dir . \

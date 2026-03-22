@@ -3,10 +3,12 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import './index.css'
 import App from './App.tsx'
+import { WriteKeyBanner } from './deployment/WriteKeyBanner'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
+      <WriteKeyBanner />
       <Routes>
         <Route path="/benchmark" element={<App view="run" />} />
         <Route path="/runs/:runId" element={<App view="detail" />} />
