@@ -135,8 +135,8 @@ Query × Config → Retrieve → LLM Generate → LLM Judge → Trace stored →
 - **Anthropic** (optional) — set `LLM_PROVIDER=anthropic` and `CLAUDE_API_KEY`
 
 ### Testing
-- **pytest** — 141 backend tests; deterministic fake embeddings in `conftest.py` for fully offline CI
-- **Vitest + React Testing Library** — 190 frontend unit/integration tests
+- **pytest** — 178 backend tests; deterministic fake embeddings in `conftest.py` for fully offline CI
+- **Vitest + React Testing Library** — 199 frontend unit/integration tests
 - **Playwright** — 14 E2E tests using `page.route()` API mocking; no backend required to run
 
 ---
@@ -287,7 +287,7 @@ Server-side filters (status, evaluator type, dataset, pipeline config) combined 
 
 ### 7. Test Suite
 
-141 backend pytest tests, 190 frontend Vitest tests, 14 Playwright E2E tests — all green. Backend tests run fully offline using deterministic fake embeddings. E2E tests use `page.route()` API mocking with no backend dependency.
+178 backend pytest tests, 199 frontend Vitest tests, 14 Playwright E2E tests — all green. Backend tests run fully offline using deterministic fake embeddings. E2E tests use `page.route()` API mocking with no backend dependency.
 
 ![Test suite](docs/images/test-suite.png)
 
@@ -305,7 +305,7 @@ Server-side filters (status, evaluator type, dataset, pipeline config) combined 
 | One config tested | Benchmark across configs; aggregate comparison with per-evaluator bucketing |
 | No operational visibility | Dashboard: 90-day trends, p95 latencies, per-config failure rates |
 | Evaluation = "looks right" | Dual-mode scoring with N/A vs zero semantics; no blended averages across evaluator types |
-| No test infrastructure | 345 automated tests across three layers with offline-capable fixtures |
+| No test infrastructure | 391 automated tests across three layers with offline-capable fixtures |
 
 The diagnosis layer is intentionally client-side: deterministic TypeScript logic over the existing run trace. No additional LLM calls, no new API contracts, fully testable in isolation.
 
@@ -313,7 +313,7 @@ The diagnosis layer is intentionally client-side: deterministic TypeScript logic
 
 ## Testing and Quality
 
-### Backend — 141 pytest tests
+### Backend — 178 pytest tests
 
 ```bash
 cd backend && pytest
@@ -323,7 +323,7 @@ Covers: document ingestion, retrieval, full RAG pipeline, heuristic + LLM judge 
 
 **Runs fully offline.** `backend/tests/conftest.py` replaces the `sentence-transformers` model with deterministic 384-dim L2-normalized fake vectors — no model download required for CI.
 
-### Frontend — 190 Vitest tests
+### Frontend — 199 Vitest tests
 
 ```bash
 cd frontend && npm run test
@@ -360,14 +360,10 @@ Tests span `e2e/run-detail.spec.ts` (11), `e2e/runs-list.spec.ts` (1), `e2e/queu
 
 | Document | Contents |
 |----------|----------|
-| `docs/BENCHMARK_WORKFLOW.md` | End-to-end seed → run → metrics workflow |
-| `docs/DEV_FULL_RUN_QUEUE.md` | Full-mode RQ operations, restart semantics, validation log |
-| `docs/FULL_RAG_EXAMPLE.md` | Full RAG run with generation + LLM judge |
-| `docs/METRICS_INSTRUMENTATION.md` | Metric semantics, evaluator bucketing, N/A vs zero |
-| `docs/DEPLOYMENT.md` | Vercel + Render runbook (`render.yaml`), env map, migrations, smoke checklist |
-| `PROJECT.md` | Architecture, API surface, data model, phase roadmap |
-| `DECISIONS.md` | Engineering constraints and design rationale |
-| `CURRENT_STATE.md` | Verified implementation state per phase |
+| [`docs/architecture.md`](docs/architecture.md) | System layout, data model, API surface, tech stack |
+| [`docs/decisions.md`](docs/decisions.md) | Design rationale and architectural constraints |
+| [`docs/benchmark-results.md`](docs/benchmark-results.md) | Measured benchmark: chunk size × top-k tradeoffs across 48 runs |
+| [`docs/deployment.md`](docs/deployment.md) | Vercel + Render deployment runbook |
 
 ---
 

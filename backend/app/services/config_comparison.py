@@ -194,6 +194,7 @@ def _build_metrics_list(
                 avg_total_latency_ms=_float_or_none(m.get("avg_total_latency_ms")),
                 p95_total_latency_ms=_float_or_none(m.get("p95_total_latency_ms")),
                 avg_groundedness=_float_or_none(m.get("avg_groundedness")),
+                avg_faithfulness=_float_or_none(m.get("avg_faithfulness")),
                 avg_completeness=_float_or_none(m.get("avg_completeness")),
                 avg_retrieval_relevance=_float_or_none(m.get("avg_retrieval_relevance")),
                 avg_context_coverage=_float_or_none(m.get("avg_context_coverage")),

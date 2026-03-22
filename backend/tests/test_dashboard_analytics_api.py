@@ -145,6 +145,258 @@ async def test_analytics_with_seeded_data(analytics_client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_time_series_cost_is_per_run_average(analytics_client: AsyncClient):
+    """avg_cost_usd in time_series is the mean of per-run costs, not per-eval-row.
+
+    Seeds two runs on the same day with costs 0.10 and 0.30.  The expected
+    daily average is 0.20.  If cost were naively averaged over joined eval rows
+    (e.g. after a one-to-many join), the number could differ.
+    """
+    async with async_session_maker() as session:
+        await _seed(session, status=STATUS_COMPLETED, failure_type="NO_FAILURE", cost=0.10, latency=50)
+        await _seed(session, status=STATUS_COMPLETED, failure_type="NO_FAILURE", cost=0.30, latency=80)
+
+    resp = await analytics_client.get(f"{BASE}/runs/dashboard-analytics")
+    assert resp.status_code == 200
+    ts = resp.json()["time_series"]
+    assert len(ts) >= 1
+
+    # Find today's bucket (seeds all land on the same day)
+    today_bucket = ts[-1]  # newest is last (reversed to oldest-first)
+    assert today_bucket["avg_cost_usd"] == pytest.approx(0.20, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_time_series_null_cost_excluded_zero_cost_preserved(analytics_client: AsyncClient):
+    """NULL cost rows are excluded; zero cost is a measured value and preserved."""
+    async with async_session_maker() as session:
+        await _seed(session, status=STATUS_COMPLETED, failure_type="NO_FAILURE", cost=None, latency=40)
+        await _seed(session, status=STATUS_COMPLETED, failure_type="NO_FAILURE", cost=0.0, latency=60)
+        await _seed(session, status=STATUS_COMPLETED, failure_type="NO_FAILURE", cost=0.20, latency=70)
+
+    resp = await analytics_client.get(f"{BASE}/runs/dashboard-analytics")
+    assert resp.status_code == 200
+    ts = resp.json()["time_series"]
+    assert len(ts) >= 1
+
+    today_bucket = ts[-1]
+    # Only 2 runs have measured cost (0.0 and 0.20) → avg = 0.10
+    assert today_bucket["avg_cost_usd"] == pytest.approx(0.10, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_time_series_all_null_cost_returns_null(analytics_client: AsyncClient):
+    """When all runs on a day have NULL cost, avg_cost_usd is null."""
+    async with async_session_maker() as session:
+        await _seed(session, status=STATUS_COMPLETED, failure_type="NO_FAILURE", cost=None, latency=50)
+
+    resp = await analytics_client.get(f"{BASE}/runs/dashboard-analytics")
+    assert resp.status_code == 200
+    ts = resp.json()["time_series"]
+    assert len(ts) >= 1
+
+    today_bucket = ts[-1]
+    assert today_bucket["avg_cost_usd"] is None
+
+
+async def _seed_with_config(
+    session,
+    *,
+    config_name: str,
+    cost: float | None,
+    latency: int = 60,
+    status: str = STATUS_COMPLETED,
+    failure_type: str = "NO_FAILURE",
+):
+    """Seed a run under a named pipeline config.  Returns (run_id, pc_id)."""
+    ds = Dataset(name="ci_ds", description="")
+    session.add(ds)
+    await session.flush()
+    qc = QueryCase(dataset_id=ds.id, query_text="q?", expected_answer=None)
+    pc = PipelineConfig(
+        name=config_name,
+        embedding_model="all-MiniLM-L6-v2",
+        chunk_strategy="fixed",
+        chunk_size=100,
+        chunk_overlap=0,
+        top_k=3,
+    )
+    session.add_all([qc, pc])
+    await session.flush()
+    run = Run(
+        query_case_id=qc.id,
+        pipeline_config_id=pc.id,
+        status=status,
+        retrieval_latency_ms=10,
+        generation_latency_ms=20,
+        evaluation_latency_ms=30,
+        total_latency_ms=latency,
+    )
+    session.add(run)
+    await session.flush()
+    session.add(
+        EvaluationResult(
+            run_id=run.id,
+            faithfulness=0.8,
+            completeness=0.7,
+            retrieval_relevance=0.9,
+            context_coverage=0.6,
+            failure_type=failure_type,
+            used_llm_judge=True,
+            metadata_json={"evaluator_type": "llm"},
+            cost_usd=cost,
+        )
+    )
+    await session.commit()
+    return run.id, pc.id
+
+
+@pytest.mark.asyncio
+async def test_config_insights_avg_cost_is_per_run(analytics_client: AsyncClient):
+    """avg_cost_usd in config_insights is the mean of per-run costs.
+
+    Seeds two runs under the same config with costs 0.10 and 0.30.
+    The expected avg_cost_usd is 0.20 and total_cost_usd is 0.40.
+    """
+    async with async_session_maker() as session:
+        _, pc_id = await _seed_with_config(session, config_name="ci_cost_avg", cost=0.10)
+    async with async_session_maker() as session:
+        # Second run under a *different* PipelineConfig row (same name pattern)
+        # but we need them under the SAME config.  Re-use pc_id directly.
+        ds = Dataset(name="ci_ds2", description="")
+        session.add(ds)
+        await session.flush()
+        qc = QueryCase(dataset_id=ds.id, query_text="q2?", expected_answer=None)
+        session.add(qc)
+        await session.flush()
+        run = Run(
+            query_case_id=qc.id,
+            pipeline_config_id=pc_id,
+            status=STATUS_COMPLETED,
+            retrieval_latency_ms=10,
+            generation_latency_ms=20,
+            evaluation_latency_ms=30,
+            total_latency_ms=80,
+        )
+        session.add(run)
+        await session.flush()
+        session.add(
+            EvaluationResult(
+                run_id=run.id,
+                faithfulness=0.8,
+                completeness=0.7,
+                retrieval_relevance=0.9,
+                context_coverage=0.6,
+                failure_type="NO_FAILURE",
+                used_llm_judge=True,
+                metadata_json={"evaluator_type": "llm"},
+                cost_usd=0.30,
+            )
+        )
+        await session.commit()
+
+    resp = await analytics_client.get(f"{BASE}/runs/dashboard-analytics")
+    assert resp.status_code == 200
+    ci_list = resp.json()["config_insights"]
+    # Find our config
+    ci = next(c for c in ci_list if c["pipeline_config_id"] == pc_id)
+    assert ci["avg_cost_usd"] == pytest.approx(0.20, abs=1e-6)
+    assert ci["total_cost_usd"] == pytest.approx(0.40, abs=1e-6)
+    # Non-cost fields should still be populated
+    assert ci["traced_runs"] == 2
+    assert ci["avg_faithfulness"] == pytest.approx(0.8, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_config_insights_null_cost_excluded_zero_preserved(analytics_client: AsyncClient):
+    """NULL cost runs excluded from avg/total; zero cost preserved as measured."""
+    async with async_session_maker() as session:
+        _, pc_id = await _seed_with_config(session, config_name="ci_null_zero", cost=None)
+    async with async_session_maker() as session:
+        ds = Dataset(name="ci_nz2", description="")
+        session.add(ds)
+        await session.flush()
+        qc = QueryCase(dataset_id=ds.id, query_text="q?", expected_answer=None)
+        session.add(qc)
+        await session.flush()
+        run = Run(
+            query_case_id=qc.id,
+            pipeline_config_id=pc_id,
+            status=STATUS_COMPLETED,
+            retrieval_latency_ms=10,
+            total_latency_ms=60,
+        )
+        session.add(run)
+        await session.flush()
+        session.add(
+            EvaluationResult(
+                run_id=run.id,
+                faithfulness=0.8,
+                completeness=0.7,
+                retrieval_relevance=0.9,
+                context_coverage=0.6,
+                failure_type="NO_FAILURE",
+                used_llm_judge=True,
+                metadata_json={"evaluator_type": "llm"},
+                cost_usd=0.0,
+            )
+        )
+        await session.commit()
+    async with async_session_maker() as session:
+        ds = Dataset(name="ci_nz3", description="")
+        session.add(ds)
+        await session.flush()
+        qc = QueryCase(dataset_id=ds.id, query_text="q?", expected_answer=None)
+        session.add(qc)
+        await session.flush()
+        run = Run(
+            query_case_id=qc.id,
+            pipeline_config_id=pc_id,
+            status=STATUS_COMPLETED,
+            retrieval_latency_ms=10,
+            total_latency_ms=60,
+        )
+        session.add(run)
+        await session.flush()
+        session.add(
+            EvaluationResult(
+                run_id=run.id,
+                faithfulness=0.8,
+                completeness=0.7,
+                retrieval_relevance=0.9,
+                context_coverage=0.6,
+                failure_type="NO_FAILURE",
+                used_llm_judge=True,
+                metadata_json={"evaluator_type": "llm"},
+                cost_usd=0.20,
+            )
+        )
+        await session.commit()
+
+    resp = await analytics_client.get(f"{BASE}/runs/dashboard-analytics")
+    assert resp.status_code == 200
+    ci = next(c for c in resp.json()["config_insights"] if c["pipeline_config_id"] == pc_id)
+    # 3 runs: NULL, 0.0, 0.20 → avg of measured = (0.0 + 0.20) / 2 = 0.10
+    assert ci["avg_cost_usd"] == pytest.approx(0.10, abs=1e-6)
+    assert ci["total_cost_usd"] == pytest.approx(0.20, abs=1e-6)
+    assert ci["traced_runs"] == 3
+
+
+@pytest.mark.asyncio
+async def test_config_insights_all_null_cost_returns_null(analytics_client: AsyncClient):
+    """When all runs under a config have NULL cost, avg/total are null."""
+    async with async_session_maker() as session:
+        _, pc_id = await _seed_with_config(session, config_name="ci_all_null", cost=None)
+
+    resp = await analytics_client.get(f"{BASE}/runs/dashboard-analytics")
+    assert resp.status_code == 200
+    ci = next(c for c in resp.json()["config_insights"] if c["pipeline_config_id"] == pc_id)
+    assert ci["avg_cost_usd"] is None
+    assert ci["total_cost_usd"] is None
+    assert ci["traced_runs"] == 1
+
+
+@pytest.mark.asyncio
 async def test_analytics_endpoint_does_not_break_dashboard_summary(analytics_client: AsyncClient):
     """Ensure the existing dashboard-summary endpoint still works after adding analytics."""
     resp = await analytics_client.get(f"{BASE}/runs/dashboard-summary")

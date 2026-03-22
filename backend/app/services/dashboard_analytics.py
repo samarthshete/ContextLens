@@ -42,21 +42,36 @@ async def _time_series(session: AsyncSession) -> list[TimeSeriesDay]:
         .correlate(Run)
     )
 
+    # Per-run cost: SUM(cost_usd) grouped by run_id, so that if the schema
+    # ever allows multiple evaluation rows per run the cost is aggregated at
+    # the run level *before* being averaged into daily buckets.  This mirrors
+    # the defensive pattern used in dashboard_summary.py for per-run LLM cost.
+    run_cost_sq = (
+        select(
+            EvaluationResult.run_id.label("run_id"),
+            func.sum(EvaluationResult.cost_usd).label("run_cost"),
+        )
+        .where(EvaluationResult.cost_usd.isnot(None))
+        .group_by(EvaluationResult.run_id)
+    ).subquery("run_cost")
+
+    # The main query no longer joins EvaluationResult directly — failure_sub
+    # is an independent subquery, and cost comes from the pre-aggregated
+    # run_cost_sq (one row per run, NULL when no measured cost).  This
+    # eliminates any dependence on join multiplicity for cost averaging.
     stmt = (
         select(
             date_col,
-            func.count().label("runs"),
-            func.count().filter(Run.status == "completed").label("completed"),
-            func.count().filter(Run.status == "failed").label("failed"),
+            func.count(Run.id).label("runs"),
+            func.count(Run.id).filter(Run.status == "completed").label("completed"),
+            func.count(Run.id).filter(Run.status == "failed").label("failed"),
             func.avg(Run.total_latency_ms).filter(
                 Run.total_latency_ms.isnot(None)
             ).label("avg_total_latency_ms"),
-            func.avg(EvaluationResult.cost_usd).filter(
-                EvaluationResult.cost_usd.isnot(None)
-            ).label("avg_cost_usd"),
-            func.count().filter(Run.id.in_(failure_sub)).label("failure_count"),
+            func.avg(run_cost_sq.c.run_cost).label("avg_cost_usd"),
+            func.count(Run.id).filter(Run.id.in_(failure_sub)).label("failure_count"),
         )
-        .outerjoin(EvaluationResult, EvaluationResult.run_id == Run.id)
+        .outerjoin(run_cost_sq, run_cost_sq.c.run_id == Run.id)
         .group_by(date_col)
         .order_by(date_col.desc())
         .limit(90)
@@ -170,6 +185,32 @@ async def _failure_analysis(session: AsyncSession) -> FailureAnalysisSection:
 
 async def _config_insights(session: AsyncSession) -> list[ConfigInsight]:
     """Per-config aggregate metrics with scores and top failure type."""
+
+    # Per-run cost subquery: SUM(cost_usd) grouped by run_id so that cost is
+    # aggregated at the run level before being rolled up per config.  This
+    # mirrors the defensive pattern in _time_series and dashboard_summary.py.
+    run_cost_sq = (
+        select(
+            EvaluationResult.run_id.label("run_id"),
+            func.sum(EvaluationResult.cost_usd).label("run_cost"),
+        )
+        .where(EvaluationResult.cost_usd.isnot(None))
+        .group_by(EvaluationResult.run_id)
+    ).subquery("run_cost")
+
+    # Per-config cost: AVG and SUM of the per-run costs, grouped by config.
+    # Completely independent of the EvaluationResult join used for scores,
+    # so row multiplicity in that join cannot inflate cost metrics.
+    config_cost_sq = (
+        select(
+            Run.pipeline_config_id.label("pc_id"),
+            func.avg(run_cost_sq.c.run_cost).label("avg_cost_usd"),
+            func.sum(run_cost_sq.c.run_cost).label("total_cost_usd"),
+        )
+        .join(run_cost_sq, run_cost_sq.c.run_id == Run.id)
+        .group_by(Run.pipeline_config_id)
+    ).subquery("config_cost")
+
     stmt = (
         select(
             PipelineConfig.id,
@@ -182,12 +223,10 @@ async def _config_insights(session: AsyncSession) -> list[ConfigInsight]:
             ).label("avg_total_latency_ms"),
             func.min(Run.total_latency_ms).label("min_total_latency_ms"),
             func.max(Run.total_latency_ms).label("max_total_latency_ms"),
-            func.avg(EvaluationResult.cost_usd).filter(
-                EvaluationResult.cost_usd.isnot(None)
-            ).label("avg_cost_usd"),
-            func.sum(EvaluationResult.cost_usd).filter(
-                EvaluationResult.cost_usd.isnot(None)
-            ).label("total_cost_usd"),
+            # Cost from pre-aggregated config_cost_sq (one row per config);
+            # MAX extracts the single value within the GROUP BY group.
+            func.max(config_cost_sq.c.avg_cost_usd).label("avg_cost_usd"),
+            func.max(config_cost_sq.c.total_cost_usd).label("total_cost_usd"),
             func.avg(EvaluationResult.retrieval_relevance).filter(
                 EvaluationResult.retrieval_relevance.isnot(None)
             ).label("avg_retrieval_relevance"),
@@ -204,6 +243,7 @@ async def _config_insights(session: AsyncSession) -> list[ConfigInsight]:
         )
         .join(Run, Run.pipeline_config_id == PipelineConfig.id)
         .outerjoin(EvaluationResult, EvaluationResult.run_id == Run.id)
+        .outerjoin(config_cost_sq, config_cost_sq.c.pc_id == PipelineConfig.id)
         .group_by(PipelineConfig.id, PipelineConfig.name)
         .order_by(PipelineConfig.id)
     )

@@ -115,3 +115,37 @@ async def test_empty_distribution_when_all_null():
     assert dist.median_ms is None
     assert dist.p95_ms is None
     assert dist.avg_ms is None
+
+
+@pytest.mark.asyncio
+async def test_single_sample_percentiles_equal_the_value():
+    """One non-null sample → P50 = P95 = that value (PostgreSQL percentile_cont on 1 row)."""
+    async with async_session_maker() as session:
+        await _minimal_run(session, retrieval_ms=42)
+
+    async with async_session_maker() as session:
+        dist = await get_phase_latency_distribution(session, Run.retrieval_latency_ms)
+
+    assert dist.count == 1
+    assert dist.min_ms == 42.0
+    assert dist.max_ms == 42.0
+    assert dist.median_ms == pytest.approx(42.0)
+    assert dist.p95_ms == pytest.approx(42.0)
+    assert dist.avg_ms == pytest.approx(42.0)
+
+
+@pytest.mark.asyncio
+async def test_two_sample_percentiles_interpolate():
+    """Two samples → percentile_cont interpolates between them."""
+    async with async_session_maker() as session:
+        await _minimal_run(session, retrieval_ms=100)
+        await _minimal_run(session, retrieval_ms=200)
+
+    async with async_session_maker() as session:
+        dist = await get_phase_latency_distribution(session, Run.retrieval_latency_ms)
+
+    assert dist.count == 2
+    assert dist.median_ms == pytest.approx(150.0)  # midpoint
+    assert dist.p95_ms is not None
+    # percentile_cont(0.95) with 2 values: 100 + 0.95*(200-100) = 195
+    assert dist.p95_ms == pytest.approx(195.0)

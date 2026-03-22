@@ -13,8 +13,8 @@ This repository is under active development. The architecture and roadmap are st
 - improve docs
 
 ## Before opening a PR
-1. Read `PROJECT.md`
-2. Check `ROADMAP.md`
+1. Read [`docs/architecture.md`](docs/architecture.md)
+2. Read [`docs/decisions.md`](docs/decisions.md)
 3. Open an issue first for significant changes
 
 ## Development principles

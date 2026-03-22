@@ -26,21 +26,10 @@ from app.schemas.dashboard_summary import (
 
 
 def _favg(v: object | None) -> float | None:
+    """Coerce Decimal / numeric DB result to float; None stays None."""
     if v is None:
         return None
-    if isinstance(v, Decimal):
-        return float(v)
     return float(v)
-
-
-def _f_or_none(v: object | None) -> float | None:
-    if v is None:
-        return None
-    if isinstance(v, Decimal):
-        x = float(v)
-    else:
-        x = float(v)
-    return x
 
 
 def _ms_to_sec(ms: float | None) -> float | None:
@@ -220,7 +209,7 @@ async def get_dashboard_summary(session: AsyncSession) -> DashboardSummaryRespon
                 used_llm_judge=bool(ev.used_llm_judge),
                 metadata_json=ev.metadata_json,
             )
-            cost_usd = _f_or_none(ev.cost_usd)
+            cost_usd = _favg(ev.cost_usd)
             failure_type = ev.failure_type or None
         recent_runs.append(
             DashboardRecentRun(
@@ -265,7 +254,7 @@ async def get_dashboard_summary(session: AsyncSession) -> DashboardSummaryRespon
             end_to_end_run_latency_p95_sec=_ms_to_sec(total_dist.p95_ms),
         ),
         cost=DashboardCostSummary(
-            total_cost_usd=_f_or_none(total_cost),
+            total_cost_usd=_favg(total_cost),
             avg_cost_usd=_favg(avg_cost),
             evaluation_rows_with_cost=with_cost,
             evaluation_rows_cost_not_available=cost_na,

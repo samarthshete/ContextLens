@@ -16,7 +16,7 @@ Set **`OPENAI_API_KEY`** (and **`LLM_PROVIDER=openai`**, default) for **`eval_mo
 
 ### Full benchmark jobs (Redis + RQ)
 
-`eval_mode=full` on **`POST /api/v1/runs`** enqueues work on queue **`contextlens_full_run`**. Jobs live in **Redis**; a **separate worker** must run the pipeline. See **`../docs/DEV_FULL_RUN_QUEUE.md`** for failure handling, restart safety, and an **E2E verification checklist**.
+`eval_mode=full` on **`POST /api/v1/runs`** enqueues work on queue **`contextlens_full_run`**. Jobs live in **Redis**; a **separate worker** must run the pipeline. See the [architecture docs](../docs/architecture.md) for system layout and the [decisions doc](../docs/decisions.md) for retry and failure semantics.
 
 **Quick pre-flight:**
 
@@ -55,6 +55,6 @@ python scripts/run_benchmark.py --eval-mode full   # needs OPENAI_API_KEY (defau
 python scripts/generate_contextlens_metrics.py --format markdown
 ```
 
-See **`../docs/BENCHMARK_WORKFLOW.md`** and **`../docs/FULL_RAG_EXAMPLE.md`**.
+See the [benchmark results](../docs/benchmark-results.md) for measured outcomes.
 
 **Inspect a run:** `GET /api/v1/runs/{run_id}` (JSON trace for demos).

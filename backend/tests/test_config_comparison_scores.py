@@ -87,3 +87,37 @@ def test_worst_avg_near_zero_returns_null_delta():
     )
     assert s.faithfulness_delta_pct is None
     assert s.completeness_delta_pct is None
+
+
+def test_three_configs_picks_extremes():
+    """With 3+ configs, best/worst are the actual max/min — middle config is ignored."""
+    s = build_config_score_comparison(
+        [
+            _m(1, faith=0.3, comp=0.2),
+            _m(2, faith=0.6, comp=0.5),
+            _m(3, faith=0.9, comp=0.8),
+        ],
+        include_faithfulness=True,
+    )
+    assert s.best_config_faithfulness == 3
+    assert s.worst_config_faithfulness == 1
+    # 100 * (0.9 - 0.3) / 0.3 = 200.0
+    assert s.faithfulness_delta_pct == pytest.approx(200.0)
+    assert s.best_config_completeness == 3
+    assert s.worst_config_completeness == 1
+    # 100 * (0.8 - 0.2) / 0.2 = 300.0
+    assert s.completeness_delta_pct == pytest.approx(300.0)
+
+
+def test_sparse_samples_skips_zero_traced_configs():
+    """Configs with traced_runs=0 are excluded from ranking even if they have scores."""
+    s = build_config_score_comparison(
+        [
+            _m(1, runs=0, faith=0.99, comp=0.99),  # zero traced → ineligible
+            _m(2, runs=5, faith=0.4, comp=0.3),
+            _m(3, runs=1, faith=0.8, comp=0.7),
+        ],
+        include_faithfulness=True,
+    )
+    assert s.best_config_faithfulness == 3
+    assert s.worst_config_faithfulness == 2

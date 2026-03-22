@@ -263,7 +263,7 @@ Do these in order; use browser devtools **Network** for CORS.
 
 ## 10. References
 
-- Queue / worker semantics: `docs/DEV_FULL_RUN_QUEUE.md`
+- Architecture and API: [`docs/architecture.md`](architecture.md)
+- Design decisions: [`docs/decisions.md`](decisions.md)
 - Local Compose: `docker-compose.yml` (backend + worker + db + redis)
 - Render Blueprint: `render.yaml` (repository root)
-- Project contract: `PROJECT.md`, `DECISIONS.md`, `CURRENT_STATE.md`

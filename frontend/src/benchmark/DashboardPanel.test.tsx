@@ -479,7 +479,7 @@ describe('DashboardPanel', () => {
     const llmHeading = screen.getByRole('heading', { name: /Pipeline configs — llm/i })
     const llmSection = llmHeading.closest('.cl-dash-bucket')
     expect(llmSection).toBeTruthy()
-    expect(within(llmSection!).getByText(/Faithfulness — best \/ worst config/i)).toBeInTheDocument()
+    expect(within(llmSection! as HTMLElement).getByText(/Faithfulness — best \/ worst config/i)).toBeInTheDocument()
     const blob = llmSection!.textContent ?? ''
     expect(blob).toMatch(/2\s*\/\s*1/)
     expect(blob).toContain('25.5%')

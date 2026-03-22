@@ -76,3 +76,11 @@ test.txt
 
 # Uploads
 uploads/
+
+# Local working docs (not for public GitHub)
+_local/
+TASK.md
+CURRENT_STATE.md
+DEMO_SCRIPT.md
+PROJECT_METRICS.md
+ROADMAP.md
