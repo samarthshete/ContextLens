@@ -1,3 +1,5 @@
+# ``backend`` and ``worker`` share the same image so one ``docker compose build`` refreshes both
+# (avoids stale ``worker`` missing deps like ``openai`` after ``pyproject.toml`` changes).
 services:
   redis:
     image: redis:7-alpine
@@ -28,11 +30,15 @@ services:
   backend:
     build:
       context: ./backend
+    image: contextlens-backend:latest
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/contextlens
       REDIS_URL: redis://redis:6379/0
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
     ports:
-      - "8000:8000"
+      - "8002:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -44,6 +50,7 @@ services:
   worker:
     build:
       context: ./backend
+    image: contextlens-backend:latest
     command:
       - rq
       - worker
@@ -53,6 +60,9 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/contextlens
       REDIS_URL: redis://redis:6379/0
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy

@@ -17,7 +17,7 @@
 | **evaluation_results** | One row per run (scores, failure, judge, cost, **groundedness**) | Per-evaluator **split** averages / failure counts / cost; `llm_judge_call_rate` (global) |
 | **documents** / **chunks** | Ingestion only | Optional inventory lines in script output (not benchmark scale) |
 
-\* **`total_traced_runs`** = runs with ≥1 `retrieval_results` and ≥1 `evaluation_results`. **`total_traced_runs_heuristic` / `total_traced_runs_llm`** use the same rule but filter the evaluation row by **evaluator bucket** (`app/domain/evaluator_bucket.py`). **`runs.status` is not used** in these counts. Score **AVGs are never blended** across buckets (`avg_*_heuristic` vs `avg_*_llm`). See generated Markdown “Semantics” and `docs/BENCHMARK_WORKFLOW.md` §5.
+\* **`total_traced_runs`** = runs with ≥1 `retrieval_results` and ≥1 `evaluation_results`. **`total_traced_runs_heuristic` / `total_traced_runs_llm`** use the same rule but filter the evaluation row by **evaluator bucket** (`app/domain/evaluator_bucket.py`). **`runs.status` is not used** in these counts. Score **AVGs are never blended** across buckets (`avg_*_heuristic` vs `avg_*_llm`). **`llm_judge_call_rate`** = `COUNT(used_llm_judge IS TRUE) / COUNT(*)`: **undefined (N/A)** when there are zero evaluation rows; **0** when rows exist but none used the judge. See generated Markdown “Semantics” and `docs/BENCHMARK_WORKFLOW.md` §5.
 
 ---
 
@@ -48,8 +48,8 @@
 |--------|-----|
 | `faithfulness`, `completeness`, `retrieval_relevance`, `context_coverage`, `groundedness` | `AVG` over non-NULL only |
 | `failure_type` | `GROUP BY` counts; values normalized to **`FailureType`** strings |
-| `used_llm_judge` | `TRUE` count / total evaluation rows |
-| `cost_usd` | `AVG(cost_usd)` over non-NULL only (often NULL for heuristic runs) |
+| `used_llm_judge` | Numerator for `llm_judge_call_rate` (see below) |
+| `cost_usd` | Full RAG: persisted **generation + judge** USD estimate (`estimate_usd_from_tokens` per phase). **NULL** when both Anthropic rates ≤ 0 or token usage unknown — not a fabricated **0**. Heuristic runs usually **NULL**. Aggregates: `AVG(cost_usd)` over non-NULL only per bucket; all-NULL → **not available**. |
 | `metadata_json` | e.g. `evaluator_type`: `heuristic` \| `llm`; not aggregated by default |
 | `created_at` | Audit |
 
@@ -61,9 +61,11 @@ After core metrics migrations (through **`0006`**: `generation_results`, `ground
 
 - All **counts** can be computed (often **0**).
 - **Avg / p95 latencies** → **not available** until runs exist with non-NULL latency columns.
-- **Score averages**, **failure counts**, **cost**, **llm_judge_call_rate** → **not available** until `evaluation_results` rows exist (and for rates/costs, the relevant columns populated).
+- **Score averages**, **per-bucket cost averages**, **`llm_judge_call_rate`** → **not available** until `evaluation_results` rows exist (and for cost averages, at least one non-NULL `cost_usd` in that bucket). **`llm_judge_call_rate`** is also **not available** when the evaluation table is empty (denominator 0). Integer **counts** (e.g. `benchmark_datasets`, `evaluation_rows_*`) may be **0** honestly.
 
 **Ingestion-only** deployments still get **document** / **chunk** inventory lines from the script.
+
+**N/A vs zero (Markdown):** the generator prints **“not available”** for undefined averages and for **`llm_judge_call_rate`** with no rows; it prints **`0`** for a real zero judge rate or a real zero count.
 
 ---
 

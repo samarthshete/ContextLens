@@ -10,7 +10,7 @@ This path produces **real database rows** (runs, retrieval results, optional gen
 - PostgreSQL with pgvector, schema at Alembic head (`cd backend && alembic upgrade head`).
 - Environment: `DATABASE_URL` / `.env` as in `backend/app/config.py`.
 - Embedding model downloads on first run (sentence-transformers).
-- **Full RAG mode:** `CLAUDE_API_KEY` / `claude_api_key` set (Anthropic).
+- **Full RAG mode:** **`OPENAI_API_KEY`** by default (**`LLM_PROVIDER=openai`**), or **`CLAUDE_API_KEY`** when **`LLM_PROVIDER=anthropic`**.
 - **HTTP/UI `eval_mode=full`:** **Redis** + RQ worker on queue **`contextlens_full_run`** (see **`docs/DEV_FULL_RUN_QUEUE.md`**, `backend/README.md`, Docker Compose **`redis`** / **`worker`**). Heuristic-only HTTP runs do not require Redis.
 
 ---
@@ -136,8 +136,10 @@ These definitions match `app/metrics/aggregate.py` and the generated Markdown **
 | `backend/scripts/seed_benchmark.py` | CLI seed |
 | `backend/scripts/run_benchmark.py` | CLI runner (`--eval-mode`) |
 | `backend/scripts/generate_contextlens_metrics.py` | Markdown from DB (split evaluator sections) |
-| `backend/app/api/runs.py` | `POST /runs`, `GET /runs`, `GET /runs/config-comparison`, `GET /runs/{id}` |
-| `backend/app/queue/full_run.py` | Enqueue full benchmark (`contextlens_full_run`) |
+| `backend/app/api/runs.py` | `POST /runs`, `POST /runs/{id}/requeue`, `GET /runs/{id}/queue-status`, `GET /runs`, `GET /runs/config-comparison`, `GET /runs/{id}` |
+| `backend/app/services/run_requeue.py` | Structural eligibility + re-enqueue onto `contextlens_full_run` |
+| `backend/app/services/run_queue_status.py` | Read-only lock + RQ job inspection |
+| `backend/app/queue/full_run.py` | Enqueue full benchmark (`contextlens_full_run`); `find_primary_job_for_run` |
 | `backend/app/workers/full_run_worker.py` | RQ worker job + lock |
 | `backend/scripts/check_redis_for_rq.py` | Pre-flight Redis PING for full runs |
 | `docs/DEV_FULL_RUN_QUEUE.md` | Ops runbook: retries, restarts, E2E checklist |
@@ -207,6 +209,18 @@ curl -s -X POST "$API/runs" \
   -d '{"query_case_id":1,"pipeline_config_id":1,"eval_mode":"heuristic"}'
 ```
 
+**Inspect queue / lock** (full runs hit Redis; heuristic returns `pipeline=heuristic` without Redis):
+
+```bash
+curl -s "$API/runs/42/queue-status"
+```
+
+**Re-enqueue a stuck full run** (same RQ queue as initial **`eval_mode=full`**; **202** + new **`job_id`** when accepted):
+
+```bash
+curl -s -X POST "$API/runs/42/requeue"
+```
+
 Scope retrieval to one uploaded document (like `run_benchmark.py --document-id`):
 
 ```bash
@@ -215,7 +229,7 @@ curl -s -X POST "$API/runs" \
   -d '{"query_case_id":1,"pipeline_config_id":1,"eval_mode":"heuristic","document_id":42}'
 ```
 
-Use `"eval_mode":"full"` only with `CLAUDE_API_KEY` set (generation + judge).
+Use `"eval_mode":"full"` only with the active provider API key set (**`OPENAI_API_KEY`** by default).
 
 **Web UI:** from `frontend/`, `npm run dev` → same-origin `/api/v1/...` via Vite proxy (**`BACKEND_PROXY_TARGET`**, default **:8002**). In-app **tabs** (no router): registry → **`POST /runs`** → runs list → detail → config comparison.
 

@@ -33,6 +33,14 @@ async def test_full_rag_generation_then_llm_judge_persists(client: AsyncClient, 
         "app.config.settings.anthropic_output_usd_per_million_tokens",
         0.0,
     )
+    monkeypatch.setattr(
+        "app.config.settings.openai_input_usd_per_million_tokens",
+        0.0,
+    )
+    monkeypatch.setattr(
+        "app.config.settings.openai_output_usd_per_million_tokens",
+        0.0,
+    )
 
     async def fake_gen(*args, **kwargs):
         return GenerationModelResult(

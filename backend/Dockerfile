@@ -14,7 +14,9 @@ COPY pyproject.toml .
 COPY README.md .
 COPY app ./app
 
-RUN pip install --no-cache-dir .
+# Install package + all [project] dependencies from pyproject.toml (includes ``openai``).
+RUN pip install --no-cache-dir . \
+    && python -c "import openai; import anthropic; print('deps ok: openai + anthropic')"
 
 EXPOSE 8000
 

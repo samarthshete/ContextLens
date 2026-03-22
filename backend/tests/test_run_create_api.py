@@ -238,17 +238,18 @@ async def test_create_run_full_without_api_key_fails_cleanly(
 
     def _boom() -> None:
         raise ValueError(
-            "claude_api_key / CLAUDE_API_KEY is not set. Required for generation and LLM judge."
+            "openai_api_key / OPENAI_API_KEY is not set. Required for full RAG when "
+            "LLM_PROVIDER is openai (default)."
         )
 
-    monkeypatch.setattr("app.services.run_create.require_api_key", _boom)
+    monkeypatch.setattr("app.services.run_create.require_llm_api_key_for_full_mode", _boom)
 
     resp = await run_create_client.post(
         f"{BASE}/runs",
         json={"query_case_id": qc_id, "pipeline_config_id": pc_id, "eval_mode": "full"},
     )
     assert resp.status_code == 503
-    assert "claude_api_key" in resp.json()["detail"].lower()
+    assert "openai_api_key" in resp.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
@@ -280,7 +281,7 @@ async def test_create_run_full_returns_202_and_run_stays_running_when_worker_noo
         await session.commit()
         qc_id, pc_id = qc.id, pc.id
 
-    monkeypatch.setattr("app.services.run_create.require_api_key", lambda: None)
+    monkeypatch.setattr("app.services.run_create.require_llm_api_key_for_full_mode", lambda: None)
 
     monkeypatch.setattr(
         "app.api.runs.enqueue_full_benchmark_run",
@@ -331,7 +332,7 @@ async def test_create_run_full_redis_unavailable_returns_503(
         await session.commit()
         qc_id, pc_id = qc.id, pc.id
 
-    monkeypatch.setattr("app.services.run_create.require_api_key", lambda: None)
+    monkeypatch.setattr("app.services.run_create.require_llm_api_key_for_full_mode", lambda: None)
 
     def _boom(_run_id: int, _document_id: int | None = None) -> str:
         raise RedisConnectionError("Redis unavailable")

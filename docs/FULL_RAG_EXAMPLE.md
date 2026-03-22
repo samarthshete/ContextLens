@@ -5,7 +5,7 @@ This mirrors **`run_benchmark.py --eval-mode full`** but shows the **service cal
 ## Preconditions
 
 - `alembic upgrade head` (includes **`generation_results`** and **`evaluation_results.groundedness`**).
-- `CLAUDE_API_KEY` set for live Anthropic calls.
+- **`OPENAI_API_KEY`** set for live OpenAI calls (default **`LLM_PROVIDER=openai`**), or **`CLAUDE_API_KEY`** if using Anthropic.
 - Chunks in DB for your corpus; benchmark seed + query cases (e.g. via `seed_benchmark.py`).
 
 ## Sequence (Python / async session)
@@ -24,7 +24,7 @@ run = await execute_retrieval_benchmark_run(
 )
 ```
 
-2. **Generation** — Claude answer, `generation_results`, `generation_latency_ms`, `status = generation_completed`.
+2. **Generation** — LLM answer (OpenAI default), `generation_results`, `generation_latency_ms`, `status = generation_completed`.
 
 ```python
 from app.services.generation_phase import execute_generation_for_run
@@ -44,7 +44,8 @@ await execute_llm_judge_and_complete_run(session, run_id=run.id, commit=True)
 
 ```bash
 cd backend
-export CLAUDE_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-...
+# or: export LLM_PROVIDER=anthropic CLAUDE_API_KEY=sk-ant-...
 python scripts/seed_benchmark.py
 python scripts/run_benchmark.py --eval-mode full
 python scripts/generate_contextlens_metrics.py --format markdown

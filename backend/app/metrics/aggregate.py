@@ -2,6 +2,19 @@
 
 Score averages and failure-type counts are **split by evaluator bucket** (heuristic vs LLM)
 so heuristic and LLM judge rows are never blended in the same AVG.
+
+**N/A (``None`` in Python / JSON, ``not available`` in generated Markdown)** vs **zero**:
+
+- **Averages** (scores, latencies, ``avg_evaluation_cost_per_run_usd_*``): if no rows
+  contribute non-NULL values to that metric, the aggregate is ``None`` — never coerced
+  to ``0``.
+- **Counts** (e.g. ``benchmark_datasets``, ``evaluation_rows_*``): ``0`` is a real
+  count when SQL returns zero rows.
+- **``llm_judge_call_rate``**: ``None`` when there are **no** ``evaluation_results``
+  rows (denominator zero — undefined). If rows exist and none used the LLM judge,
+  the rate is ``0.0`` (a real zero).
+- **``cost_usd`` averages**: only rows with ``cost_usd IS NOT NULL`` participate;
+  all-NULL in a bucket → ``None`` for that bucket's average (not ``0``).
 """
 
 from __future__ import annotations
@@ -276,6 +289,7 @@ async def aggregate_all_metrics(conn: AsyncConnection) -> dict[str, Any]:
                 """,
             )
 
+    # Ratio over all evaluation rows; undefined (N/A) when denominator is 0.
     n_eval = await _scalar(conn, "SELECT COUNT(*) FROM evaluation_results")
     if not n_eval:
         out["llm_judge_call_rate"] = None

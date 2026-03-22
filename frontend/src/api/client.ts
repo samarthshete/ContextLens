@@ -1,16 +1,28 @@
 import { API_BASE } from '../config'
 import type {
   ConfigComparisonResponse,
+  DashboardAnalyticsResponse,
   Dataset,
+  DatasetCreateBody,
+  DatasetUpdateBody,
+  DocumentChunk,
   DocumentListItem,
   DocumentResponse,
   PipelineConfig,
+  PipelineConfigCreateBody,
+  PipelineConfigUpdateBody,
   QueryCase,
+  QueryCaseCreateBody,
+  QueryCaseUpdateBody,
   RunCreateBody,
+  DashboardSummaryResponse,
   RunCreateOutcome,
   RunCreateResponse,
   RunDetail,
+  ListRunsParams,
   RunListResponse,
+  RunQueueStatusResponse,
+  RunRequeueResponse,
 } from './types'
 
 export type DocumentUploadOptions = {
@@ -58,17 +70,53 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+async function apiJson<T>(path: string, method: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  const init: RequestInit = { method, headers }
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json'
+    init.body = JSON.stringify(body)
+  }
+  return apiFetch<T>(path, init)
+}
+
 export const api = {
   listDatasets: () => apiFetch<Dataset[]>('/datasets'),
+
+  createDataset: (body: DatasetCreateBody) => apiJson<Dataset>('/datasets', 'POST', body),
+
+  updateDataset: (id: number, body: DatasetUpdateBody) =>
+    apiJson<Dataset>(`/datasets/${id}`, 'PATCH', body),
+
+  deleteDataset: (id: number) => apiJson<void>(`/datasets/${id}`, 'DELETE'),
 
   listQueryCases: (datasetId?: number) => {
     const q = datasetId != null ? `?dataset_id=${datasetId}` : ''
     return apiFetch<QueryCase[]>(`/query-cases${q}`)
   },
 
+  createQueryCase: (body: QueryCaseCreateBody) => apiJson<QueryCase>('/query-cases', 'POST', body),
+
+  updateQueryCase: (id: number, body: QueryCaseUpdateBody) =>
+    apiJson<QueryCase>(`/query-cases/${id}`, 'PATCH', body),
+
+  deleteQueryCase: (id: number) => apiJson<void>(`/query-cases/${id}`, 'DELETE'),
+
   listPipelineConfigs: () => apiFetch<PipelineConfig[]>('/pipeline-configs'),
 
+  createPipelineConfig: (body: PipelineConfigCreateBody) =>
+    apiJson<PipelineConfig>('/pipeline-configs', 'POST', body),
+
+  updatePipelineConfig: (id: number, body: PipelineConfigUpdateBody) =>
+    apiJson<PipelineConfig>(`/pipeline-configs/${id}`, 'PATCH', body),
+
+  deletePipelineConfig: (id: number) => apiJson<void>(`/pipeline-configs/${id}`, 'DELETE'),
+
   listDocuments: () => apiFetch<DocumentListItem[]>('/documents'),
+
+  getDocument: (id: number) => apiFetch<DocumentResponse>(`/documents/${id}`),
+
+  getDocumentChunks: (id: number) => apiFetch<DocumentChunk[]>(`/documents/${id}/chunks`),
 
   /**
    * Multipart upload to ``POST /documents`` (ingest + chunk + embed).
@@ -116,15 +164,31 @@ export const api = {
     return { ...data, httpStatus: res.status }
   },
 
-  listRuns: (params?: { limit?: number; offset?: number }) => {
+  dashboardSummary: () => apiFetch<DashboardSummaryResponse>('/runs/dashboard-summary'),
+
+  dashboardAnalytics: () => apiFetch<DashboardAnalyticsResponse>('/runs/dashboard-analytics'),
+
+  listRuns: (params?: ListRunsParams) => {
     const sp = new URLSearchParams()
     if (params?.limit != null) sp.set('limit', String(params.limit))
     if (params?.offset != null) sp.set('offset', String(params.offset))
+    if (params?.dataset_id != null) sp.set('dataset_id', String(params.dataset_id))
+    if (params?.pipeline_config_id != null) {
+      sp.set('pipeline_config_id', String(params.pipeline_config_id))
+    }
+    if (params?.evaluator_type != null) sp.set('evaluator_type', params.evaluator_type)
+    if (params?.status != null && params.status !== '') sp.set('status', params.status)
     const q = sp.toString()
     return apiFetch<RunListResponse>(`/runs${q ? `?${q}` : ''}`)
   },
 
   getRun: (runId: number) => apiFetch<RunDetail>(`/runs/${runId}`),
+
+  getRunQueueStatus: (runId: number) =>
+    apiFetch<RunQueueStatusResponse>(`/runs/${runId}/queue-status`),
+
+  requeueRun: (runId: number) =>
+    apiJson<RunRequeueResponse>(`/runs/${runId}/requeue`, 'POST'),
 
   configComparison: (
     pipelineConfigIds: number[],

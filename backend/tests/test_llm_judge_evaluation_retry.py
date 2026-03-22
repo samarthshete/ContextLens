@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.config import settings
 from app.services.llm_judge_evaluation import JUDGE_PROMPT_VERSION, evaluate_with_llm_judge
 
 _VALID = (
@@ -23,6 +24,7 @@ def _fake_message(text: str, inp: int = 5, out: int = 10) -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_judge_first_ok_no_retry(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(settings, "llm_provider", "anthropic")
     client = MagicMock()
     client.messages.create = AsyncMock(return_value=_fake_message(_VALID, 10, 20))
     monkeypatch.setattr("app.services.llm_judge_evaluation.get_async_anthropic", lambda: client)
@@ -46,6 +48,7 @@ async def test_judge_first_ok_no_retry(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 async def test_judge_first_bad_second_ok_retry_succeeds(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(settings, "llm_provider", "anthropic")
     client = MagicMock()
     client.messages.create = AsyncMock(
         side_effect=[
@@ -73,6 +76,7 @@ async def test_judge_first_bad_second_ok_retry_succeeds(monkeypatch: pytest.Monk
 
 @pytest.mark.asyncio
 async def test_judge_both_attempts_bad_retry_fails(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(settings, "llm_provider", "anthropic")
     client = MagicMock()
     client.messages.create = AsyncMock(
         side_effect=[
@@ -94,6 +98,7 @@ async def test_judge_both_attempts_bad_retry_fails(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.asyncio
 async def test_judge_transport_error_no_second_call(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(settings, "llm_provider", "anthropic")
     client = MagicMock()
 
     async def boom(**kwargs):
@@ -106,3 +111,28 @@ async def test_judge_transport_error_no_second_call(monkeypatch: pytest.MonkeyPa
         await evaluate_with_llm_judge(query="q", context_chunks=["c"], generated_answer="a")
 
     assert client.messages.create.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_judge_openai_path_uses_chat_completions(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    completion = MagicMock()
+    completion.choices = [MagicMock(message=MagicMock(content=_VALID))]
+    completion.usage = MagicMock(prompt_tokens=10, completion_tokens=22)
+    client = MagicMock()
+    client.chat = MagicMock()
+    client.chat.completions = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=completion)
+    monkeypatch.setattr("app.services.llm_judge_evaluation.get_async_openai", lambda: client)
+
+    r = await evaluate_with_llm_judge(
+        query="q",
+        context_chunks=["ctx"],
+        generated_answer="ans",
+    )
+
+    assert client.chat.completions.create.call_count == 1
+    assert r.metadata_json["llm_provider"] == "openai"
+    assert r.metadata_json["judge_parse_ok"] is True
+    assert r.judge_input_tokens == 10
+    assert r.judge_output_tokens == 22

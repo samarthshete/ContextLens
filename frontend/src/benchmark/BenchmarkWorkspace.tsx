@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
 import type {
   ConfigComparisonMetrics,
@@ -12,10 +13,35 @@ import type {
 } from '../api/types'
 import { describeApiError } from './errorMessage'
 import { isBenchmarkFormReady } from './formValidation'
+import { RegistryPanel, type RegistryNotice } from './RegistryPanel'
+import { RunQueuePanel } from './RunQueuePanel'
 import { UploadDocumentPanel } from './UploadDocumentPanel'
+import { DashboardPanel } from './DashboardPanel'
+import { ContextQualityPanel } from './ContextQualityPanel'
+import { GenerationJudgeInsightsPanel } from './GenerationJudgeInsightsPanel'
+import { RunDiffPanel } from './RunDiffPanel'
+import { documentTitleLookupMap } from './retrievalSourceFormat'
+import { RetrievalHitsSection } from './RetrievalHitsSection'
+import { RetrievalDiagnosisPanel } from './RetrievalDiagnosisPanel'
+import { RunDiagnosisSummary } from './RunDiagnosisSummary'
+import { DocumentDetailPanel } from './DocumentDetailPanel'
+import { PhaseTimeline } from './PhaseTimeline'
+import { QueueBrowserPanel } from './QueueBrowserPanel'
+import { RunsFilterBar } from './RunsFilterBar'
+import {
+  RUNS_LIST_FILTERS_INIT,
+  buildListRunsApiParams,
+  narrowRunsOnPage,
+  type RunsListServerFilters,
+} from './runsListQuery'
+import {
+  runTraceExportFilename,
+  serializeRunTraceJson,
+  triggerBrowserDownload,
+} from './exportDownload'
 import './benchmark.css'
 
-type View = 'run' | 'runs' | 'detail' | 'compare'
+export type View = 'run' | 'runs' | 'queue' | 'detail' | 'compare' | 'dashboard' | 'document'
 
 const RUNS_PAGE = 25
 
@@ -195,8 +221,10 @@ function MetricsTable({ rows, title }: { rows: ConfigComparisonMetrics[]; title:
   )
 }
 
-export function BenchmarkWorkspace() {
-  const [view, setView] = useState<View>('run')
+export function BenchmarkWorkspace({ routeView }: { routeView: View }) {
+  const navigate = useNavigate()
+  const params = useParams<{ runId?: string; documentId?: string }>()
+  const view = routeView
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [queryCases, setQueryCases] = useState<QueryCase[]>([])
   const [pipelineConfigs, setPipelineConfigs] = useState<PipelineConfig[]>([])
@@ -209,6 +237,13 @@ export function BenchmarkWorkspace() {
   const [evalMode, setEvalMode] = useState<'heuristic' | 'full'>('heuristic')
 
   const [registryLoading, setRegistryLoading] = useState(true)
+  const [registryInitDone, setRegistryInitDone] = useState(false)
+  const [registryNotice, setRegistryNotice] = useState<RegistryNotice | null>(null)
+  const selectionRef = useRef({
+    datasetId: '' as number | '',
+    queryCaseId: '' as number | '',
+    pipelineConfigId: '' as number | '',
+  })
   const [queryCasesLoading, setQueryCasesLoading] = useState(false)
   const [submitLoading, setSubmitLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -225,8 +260,14 @@ export function BenchmarkWorkspace() {
   const [runsLoading, setRunsLoading] = useState(false)
   /** Next offset for “Load more” (ref avoids stale closures). */
   const runsNextOffsetRef = useRef(0)
+  const [runsFilters, setRunsFilters] = useState<RunsListServerFilters>(RUNS_LIST_FILTERS_INIT)
+  const [runsNarrowText, setRunsNarrowText] = useState('')
 
-  const [detailRunId, setDetailRunId] = useState<number | null>(null)
+  // Derive initial detailRunId from URL params when entering via /runs/:runId
+  const paramRunId = params.runId != null ? Number(params.runId) : null
+  const [detailRunId, setDetailRunId] = useState<number | null>(
+    view === 'detail' && paramRunId != null && Number.isFinite(paramRunId) ? paramRunId : null,
+  )
   const [runDetail, setRunDetail] = useState<RunDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
 
@@ -238,31 +279,97 @@ export function BenchmarkWorkspace() {
     ReturnType<typeof api.configComparison>
   > | null>(null)
 
+  const dashboardCompareIds = useMemo(
+    () => pipelineConfigs.map((c) => c.id).slice(0, 12),
+    [pipelineConfigs],
+  )
+
+  const documentTitleById = useMemo(() => documentTitleLookupMap(documents), [documents])
+
+  const runsVisible = useMemo(
+    () => narrowRunsOnPage(runs, runsNarrowText, pipelineConfigs),
+    [runs, runsNarrowText, pipelineConfigs],
+  )
+
+  const clearRunsFilters = useCallback(() => {
+    setRunsFilters(RUNS_LIST_FILTERS_INIT)
+    setRunsNarrowText('')
+  }, [])
+
+  // Sync detailRunId from URL when the route param changes
+  useEffect(() => {
+    if (view === 'detail' && paramRunId != null && Number.isFinite(paramRunId)) {
+      setDetailRunId(paramRunId)
+    }
+  }, [view, paramRunId])
+
   const canSubmit = isBenchmarkFormReady(datasetId, queryCaseId, pipelineConfigId)
+
+  selectionRef.current = { datasetId, queryCaseId, pipelineConfigId }
 
   const clearMessages = useCallback(() => {
     setError(null)
     setSuccessMsg(null)
   }, [])
 
-  const loadRegistry = useCallback(async () => {
-    setRegistryLoading(true)
-    clearMessages()
-    try {
-      const [ds, pcs, docs] = await Promise.all([
-        api.listDatasets(),
-        api.listPipelineConfigs(),
-        api.listDocuments(),
-      ])
-      setDatasets(ds)
-      setPipelineConfigs(pcs)
-      setDocuments(docs)
-    } catch (e) {
-      setError(describeApiError(e))
-    } finally {
-      setRegistryLoading(false)
-    }
-  }, [clearMessages])
+  const loadRegistry = useCallback(
+    async (options?: { preserveSelection?: boolean }) => {
+      setRegistryLoading(true)
+      clearMessages()
+      try {
+        const [ds, pcs, docs] = await Promise.all([
+          api.listDatasets(),
+          api.listPipelineConfigs(),
+          api.listDocuments(),
+        ])
+        setDatasets(ds)
+        setPipelineConfigs(pcs)
+        setDocuments(docs)
+        setDocumentId((prev) => {
+          if (prev === 'none' || prev === '') return prev
+          if (docs.some((d) => d.id === prev)) return prev
+          return 'none'
+        })
+
+        if (options?.preserveSelection) {
+          const snap = selectionRef.current
+          const nextD =
+            snap.datasetId !== '' && ds.some((x) => x.id === snap.datasetId) ? snap.datasetId : ''
+          setDatasetId(nextD)
+          if (nextD !== '') {
+            setQueryCasesLoading(true)
+            try {
+              const qc = await api.listQueryCases(Number(nextD))
+              setQueryCases(qc)
+              const nextQ =
+                snap.queryCaseId !== '' && qc.some((x) => x.id === snap.queryCaseId)
+                  ? snap.queryCaseId
+                  : qc.length
+                    ? qc[0].id
+                    : ''
+              setQueryCaseId(nextQ)
+            } finally {
+              setQueryCasesLoading(false)
+            }
+          } else {
+            setQueryCases([])
+            setQueryCaseId('')
+          }
+          const nextP =
+            snap.pipelineConfigId !== '' && pcs.some((x) => x.id === snap.pipelineConfigId)
+              ? snap.pipelineConfigId
+              : ''
+          setPipelineConfigId(nextP)
+        }
+      } catch (e) {
+        setError(describeApiError(e))
+      } finally {
+        setRegistryLoading(false)
+        setRegistryInitDone(true)
+      }
+    },
+    [clearMessages],
+  )
 
   const refreshDocumentsOnly = useCallback(async () => {
     try {
@@ -326,7 +433,11 @@ export function BenchmarkWorkspace() {
   const refreshRuns = useCallback(async (opts?: { quiet?: boolean }) => {
     setRunsLoading(true)
     try {
-      const r = await api.listRuns({ limit: RUNS_PAGE, offset: 0 })
+      const r = await api.listRuns({
+        limit: RUNS_PAGE,
+        offset: 0,
+        ...buildListRunsApiParams(runsFilters),
+      })
       setRuns(r.items)
       runsNextOffsetRef.current = r.items.length
       setRunsTotal(r.total)
@@ -336,13 +447,17 @@ export function BenchmarkWorkspace() {
     } finally {
       setRunsLoading(false)
     }
-  }, [])
+  }, [runsFilters])
 
   const loadMoreRuns = useCallback(async () => {
     setRunsLoading(true)
     try {
       const offset = runsNextOffsetRef.current
-      const r = await api.listRuns({ limit: RUNS_PAGE, offset })
+      const r = await api.listRuns({
+        limit: RUNS_PAGE,
+        offset,
+        ...buildListRunsApiParams(runsFilters),
+      })
       setRuns((prev) => [...prev, ...r.items])
       runsNextOffsetRef.current = offset + r.items.length
       setRunsTotal(r.total)
@@ -352,7 +467,7 @@ export function BenchmarkWorkspace() {
     } finally {
       setRunsLoading(false)
     }
-  }, [])
+  }, [runsFilters])
 
   useEffect(() => {
     if (view === 'runs') {
@@ -431,10 +546,26 @@ export function BenchmarkWorkspace() {
 
   function goView(next: View) {
     clearMessages()
-    setView(next)
-    if (next === 'detail' && detailRunId == null && lastRunId != null) {
-      setDetailRunId(lastRunId)
+    setRegistryNotice(null)
+    if (next === 'detail') {
+      const id = detailRunId ?? lastRunId
+      if (id != null) {
+        navigate(`/runs/${id}`)
+      } else {
+        navigate('/runs')
+      }
+      return
     }
+    const paths: Record<View, string> = {
+      run: '/benchmark',
+      runs: '/runs',
+      queue: '/queue',
+      detail: '/runs',
+      compare: '/compare',
+      dashboard: '/dashboard',
+      document: '/benchmark',
+    }
+    navigate(paths[next])
   }
 
   async function handleSubmitRun(e: React.FormEvent) {
@@ -442,6 +573,7 @@ export function BenchmarkWorkspace() {
     if (!canSubmit) return
     setSubmitLoading(true)
     clearMessages()
+    setRegistryNotice(null)
     try {
       const body = {
         query_case_id: Number(queryCaseId),
@@ -469,7 +601,7 @@ export function BenchmarkWorkspace() {
         setSuccessMsg(`Run #${res.run_id} completed with status “${res.status}”.`)
       }
       void refreshRuns({ quiet: res.httpStatus === 202 })
-      setView('detail')
+      navigate(`/runs/${res.run_id}`)
     } catch (err) {
       setError(describeApiError(err))
     } finally {
@@ -525,10 +657,13 @@ export function BenchmarkWorkspace() {
           <button type="button" data-active={view === 'compare'} onClick={() => goView('compare')}>
             Config comparison
           </button>
+          <button type="button" data-active={view === 'dashboard'} onClick={() => goView('dashboard')}>
+            Dashboard
+          </button>
         </nav>
       </header>
 
-      {registryLoading && view === 'run' ? (
+      {view === 'run' && !registryInitDone ? (
         <p className="cl-loading" aria-live="polite">
           Loading registry…
         </p>
@@ -552,20 +687,57 @@ export function BenchmarkWorkspace() {
         </div>
       ) : null}
 
-      {view === 'run' && (
-        <form className="cl-card" onSubmit={handleSubmitRun}>
-          <h2>New traced run</h2>
-          <p className="cl-muted">
-            Backend <code>POST /api/v1/runs</code> · Vite proxies <code>/api</code> (default backend{' '}
-            <code>:8002</code>).
-          </p>
+      {view === 'run' && registryInitDone && (
+        <>
+          <section className="cl-card cl-flow-card" aria-label="Workflow">
+            <h2 className="cl-flow-title">How to run a benchmark</h2>
+            <ol className="cl-flow-steps">
+              <li>
+                <strong>Registry</strong> — ensure a dataset, at least one query case, and a pipeline config
+                exist (use the section below or <code>seed_benchmark.py</code>).
+              </li>
+              <li>
+                <strong>Corpus scope (optional)</strong> — limit retrieval to one uploaded document, or leave{' '}
+                <em>All indexed chunks</em> to search everything.
+              </li>
+              <li>
+                <strong>Eval mode</strong> — heuristic (fast, no LLM generation) or full RAG (OpenAI by default, Redis
+                worker, API key).
+              </li>
+            </ol>
+          </section>
 
-          {!datasets.length && !registryLoading ? (
-            <p className="cl-empty-banner">
-              No datasets found. Seed the benchmark registry (<code>seed_benchmark.py</code>) or add rows
-              via scripts.
+          {registryLoading ? (
+            <p className="cl-loading-inline cl-flow-refresh" aria-live="polite">
+              Refreshing registry lists…
             </p>
           ) : null}
+
+          <RegistryPanel
+            datasets={datasets}
+            pipelineConfigs={pipelineConfigs}
+            selectedDatasetId={datasetId}
+            registryLoading={registryLoading}
+            onPreservingReload={() => loadRegistry({ preserveSelection: true })}
+            notice={registryNotice}
+            setNotice={setRegistryNotice}
+            onCreatedDataset={(id) => setDatasetId(id)}
+            onCreatedQueryCase={(id) => setQueryCaseId(id)}
+            onCreatedPipelineConfig={(id) => setPipelineConfigId(id)}
+          />
+
+          <form className="cl-card cl-run-form" onSubmit={handleSubmitRun}>
+            <h2>Start a run</h2>
+            <p className="cl-muted">
+              <code>POST /api/v1/runs</code> · Vite proxies <code>/api</code> (default backend <code>:8002</code>).
+            </p>
+
+            {!datasets.length && !registryLoading ? (
+              <p className="cl-empty-banner">
+                No datasets yet. Create one under <strong>Benchmark registry</strong> above or run{' '}
+                <code>seed_benchmark.py</code>.
+              </p>
+            ) : null}
 
           <div className="cl-field">
             <label htmlFor="dataset">Dataset</label>
@@ -635,30 +807,40 @@ export function BenchmarkWorkspace() {
             </select>
           </div>
 
-          <div className="cl-field">
-            <label htmlFor="doc">Document scope (optional)</label>
-            <select
-              id="doc"
-              value={documentId === 'none' ? 'none' : String(documentId)}
-              onChange={(ev) => {
-                const v = ev.target.value
-                setDocumentId(v === 'none' ? 'none' : Number(v))
-              }}
-              disabled={registryLoading}
-            >
-              <option value="none">All indexed chunks (no filter)</option>
-              {documents.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.title} — {d.status} (id {d.id})
-                </option>
-              ))}
-            </select>
-          </div>
+          <section className="cl-subcard" aria-labelledby="corpus-heading">
+            <h3 id="corpus-heading" className="cl-subcard-title">
+              Corpus scope &amp; upload
+            </h3>
+            <p className="cl-field-hint cl-mb">
+              Retrieval always uses your vector index. Choose <strong>All indexed chunks</strong> to search every
+              processed document, or pick a single document to scope the run (same as CLI <code>--document-id</code>
+              ).
+            </p>
+            <div className="cl-field">
+              <label htmlFor="doc">Document scope for this run</label>
+              <select
+                id="doc"
+                value={documentId === 'none' ? 'none' : String(documentId)}
+                onChange={(ev) => {
+                  const v = ev.target.value
+                  setDocumentId(v === 'none' ? 'none' : Number(v))
+                }}
+                disabled={registryLoading}
+              >
+                <option value="none">All indexed chunks (no document filter)</option>
+                {documents.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.title} — {d.status} (id {d.id})
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          <UploadDocumentPanel
-            disabled={registryLoading}
-            onDocumentUploaded={(doc) => void handleDocumentUploaded(doc)}
-          />
+            <UploadDocumentPanel
+              disabled={registryLoading}
+              onDocumentUploaded={(doc) => void handleDocumentUploaded(doc)}
+            />
+          </section>
 
           <div className="cl-field">
             <label htmlFor="eval">Eval mode</label>
@@ -667,8 +849,8 @@ export function BenchmarkWorkspace() {
               value={evalMode}
               onChange={(ev) => setEvalMode(ev.target.value as 'heuristic' | 'full')}
             >
-              <option value="heuristic">heuristic (no Claude)</option>
-              <option value="full">full (generation + judge — needs API key)</option>
+              <option value="heuristic">heuristic (no LLM generation)</option>
+              <option value="full">full (OpenAI generation + judge — needs key + worker)</option>
             </select>
           </div>
 
@@ -690,19 +872,30 @@ export function BenchmarkWorkspace() {
               type="button"
               className="cl-btn cl-btn-secondary"
               disabled={registryLoading}
-              onClick={() => void loadRegistry()}
+              onClick={() => void loadRegistry({ preserveSelection: true })}
             >
-              Reload registry
+              Reload lists &amp; documents
             </button>
           </div>
         </form>
+        </>
       )}
 
       {view === 'runs' && (
         <section className="cl-card">
           <h2>Recent runs</h2>
+          <RunsFilterBar
+            values={runsFilters}
+            narrowText={runsNarrowText}
+            onChange={(partial) => setRunsFilters((prev) => ({ ...prev, ...partial }))}
+            onNarrowTextChange={setRunsNarrowText}
+            onClear={clearRunsFilters}
+            datasets={datasets}
+            pipelineConfigs={pipelineConfigs}
+          />
           <p className="cl-muted">
-            Showing {runs.length} of {runsTotal} · newest first
+            Showing {runsVisible.length} of {runs.length} on this page · {runsTotal} total match current filters
+            {runsNarrowText.trim() ? ' (narrow filter active on loaded rows)' : ''} · newest first
           </p>
           <div className="cl-actions" style={{ marginTop: 0 }}>
             <button
@@ -721,6 +914,10 @@ export function BenchmarkWorkspace() {
             <p className="cl-loading">Loading runs…</p>
           ) : !runs.length ? (
             <p className="cl-empty-banner">No runs yet. Create one from “Run benchmark”.</p>
+          ) : runsVisible.length === 0 ? (
+            <p className="cl-empty-banner" data-testid="runs-narrow-empty">
+              No runs on this page match the narrow filter. Clear it or load more rows.
+            </p>
           ) : (
             <div className="cl-table-wrap">
               <table className="cl-table">
@@ -736,7 +933,7 @@ export function BenchmarkWorkspace() {
                   </tr>
                 </thead>
                 <tbody>
-                  {runs.map((r) => (
+                  {runsVisible.map((r) => (
                     <tr key={r.run_id}>
                       <td>{r.run_id}</td>
                       <td>{formatWhen(r.created_at)}</td>
@@ -754,9 +951,8 @@ export function BenchmarkWorkspace() {
                           type="button"
                           className="link"
                           onClick={() => {
-                            setDetailRunId(r.run_id)
                             clearMessages()
-                            setView('detail')
+                            navigate(`/runs/${r.run_id}`)
                           }}
                         >
                           Open
@@ -798,19 +994,45 @@ export function BenchmarkWorkspace() {
                 const t = ev.target.value.trim()
                 if (t === '') {
                   setDetailRunId(null)
+                  navigate('/runs', { replace: true })
                   return
                 }
                 const n = Number(t)
-                setDetailRunId(Number.isFinite(n) ? n : null)
+                if (Number.isFinite(n) && Number.isInteger(n) && n > 0) {
+                  setDetailRunId(n)
+                  navigate(`/runs/${n}`, { replace: true })
+                } else {
+                  setDetailRunId(null)
+                }
               }}
             />
           </div>
-          {detailLoading ? (
+          {params.runId != null && (detailRunId == null || !Number.isFinite(detailRunId)) ? (
+            <p className="cl-msg cl-msg-error" role="alert">
+              Invalid run ID: &quot;{params.runId}&quot;. Run IDs must be positive integers.
+            </p>
+          ) : detailLoading ? (
             <p className="cl-loading">Loading run…</p>
           ) : runDetail ? (
             <>
               <section className="cl-subsection">
-                <h3>Summary</h3>
+                <div className="cl-subsection-header-row">
+                  <h3>Summary</h3>
+                  <button
+                    type="button"
+                    className="cl-btn cl-btn-secondary cl-btn-sm"
+                    data-testid="run-export-json"
+                    onClick={() => {
+                      triggerBrowserDownload(
+                        runTraceExportFilename(runDetail.run_id),
+                        serializeRunTraceJson(runDetail),
+                        'application/json',
+                      )
+                    }}
+                  >
+                    Export JSON
+                  </button>
+                </div>
                 <p className="cl-muted cl-detail-status-row">
                   <RunStatusBadge status={runDetail.status} />
                   <span className="cl-stage-label">
@@ -826,12 +1048,19 @@ export function BenchmarkWorkspace() {
                   Evaluator <strong>{runDetail.evaluator_type}</strong> · created{' '}
                   {formatWhen(runDetail.created_at)}
                 </p>
-                <p className="cl-muted">
-                  Latencies (ms) — retrieval / generation / evaluation / total:{' '}
-                  {runDetail.retrieval_latency_ms ?? '—'} / {runDetail.generation_latency_ms ?? '—'} /{' '}
-                  {runDetail.evaluation_latency_ms ?? '—'} / {runDetail.total_latency_ms ?? '—'}
-                </p>
               </section>
+
+              <PhaseTimeline runDetail={runDetail} />
+
+              <RunDiagnosisSummary runDetail={runDetail} />
+
+              {runDetail.run_id === detailRunId ? (
+                <RunQueuePanel
+                  key={runDetail.run_id}
+                  runId={runDetail.run_id}
+                  runStatus={runDetail.status}
+                />
+              ) : null}
 
               <section className="cl-subsection">
                 <h3>Query</h3>
@@ -852,20 +1081,19 @@ export function BenchmarkWorkspace() {
                 </p>
               </section>
 
-              <section className="cl-subsection">
-                <h3>Retrieval hits ({runDetail.retrieval_hits.length})</h3>
-                {!runDetail.retrieval_hits.length ? (
-                  <p className="cl-muted">No chunks retrieved.</p>
-                ) : (
-                  runDetail.retrieval_hits.map((h) => (
-                    <div key={h.chunk_id} className="cl-hit">
-                      <strong>#{h.rank}</strong> score {h.score.toFixed(4)} · doc {h.document_id} · chunk{' '}
-                      {h.chunk_id}
-                      <pre className="cl-pre cl-pre-sm">{h.content}</pre>
-                    </div>
-                  ))
-                )}
-              </section>
+              <div className="cl-diagnosis-stack">
+                <RetrievalDiagnosisPanel runDetail={runDetail} />
+                <ContextQualityPanel runDetail={runDetail} />
+              </div>
+
+              <RetrievalHitsSection
+                hits={runDetail.retrieval_hits}
+                documentTitleById={documentTitleById}
+              />
+
+              <GenerationJudgeInsightsPanel runDetail={runDetail} />
+
+              <RunDiffPanel baseRun={runDetail} />
 
               <section className="cl-subsection">
                 <h3>Generation</h3>
@@ -969,7 +1197,7 @@ export function BenchmarkWorkspace() {
                 type="button"
                 className="cl-btn cl-btn-secondary"
                 disabled={registryLoading}
-                onClick={() => void loadRegistry()}
+                onClick={() => void loadRegistry({ preserveSelection: true })}
               >
                 Reload configs
               </button>
@@ -988,6 +1216,23 @@ export function BenchmarkWorkspace() {
           )}
         </section>
       )}
+
+      {view === 'dashboard' && (
+        <DashboardPanel
+          pipelineConfigIds={dashboardCompareIds}
+          onOpenRunDetail={(id) => {
+            clearMessages()
+            setRegistryNotice(null)
+            navigate(`/runs/${id}`)
+          }}
+        />
+      )}
+
+      {view === 'queue' && (
+        <QueueBrowserPanel pipelineConfigs={pipelineConfigs} registryLoading={registryLoading} />
+      )}
+
+      {view === 'document' && <DocumentDetailPanel />}
     </div>
   )
 }

@@ -1,4 +1,4 @@
-"""LLM-as-judge: scores + failure taxonomy from Claude (JSON output)."""
+"""LLM-as-judge: scores + failure taxonomy via OpenAI (default) or Anthropic (JSON output)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from app.config import settings
 from app.domain.failure_taxonomy import FailureType
 from app.services.anthropic_client import get_async_anthropic
 from app.services.llm_judge_parse import extract_judge_json_object, parse_judge_payload
+from app.services.openai_client import get_async_openai
 
 # Logical evaluator id (bucket / metadata.evaluator); unchanged for backward compatibility.
 EVALUATOR_ID = "claude_llm_judge_v1"
@@ -95,6 +96,7 @@ def _build_result_from_raw(
     model_id: str,
     judge_input_tokens: int | None,
     judge_output_tokens: int | None,
+    llm_provider: str,
 ) -> LLMJudgeEvalResult:
     """Single parse pass → result + metadata (no retry keys)."""
     data, w_extract = extract_judge_json_object(raw)
@@ -106,6 +108,7 @@ def _build_result_from_raw(
         "evaluator_type": "llm",
         "judge_prompt_version": JUDGE_PROMPT_VERSION,
         "judge_model": model_id,
+        "llm_provider": llm_provider,
         "raw_judge_text_preview": raw[:2000],
         "judge_parse_ok": _compute_judge_parse_ok(all_warnings),
         "judge_parse_warnings": all_warnings,
@@ -168,12 +171,12 @@ async def evaluate_with_llm_judge(
     reference_answer: str | None = None,
     model: str | None = None,
 ) -> LLMJudgeEvalResult:
-    """Call Claude judge; on structural parse failure (**judge_parse_ok** false), retry the API once.
+    """Call configured LLM judge; on structural parse failure (**judge_parse_ok** false), retry once.
 
     Transport errors are **not** caught here (propagate to RQ / caller). Only **successful** HTTP responses
     are parsed; a bad structure triggers at most **one** extra judge call.
     """
-    client = get_async_anthropic()
+    provider = (settings.llm_provider or "openai").strip().lower()
     model_id = model or settings.evaluation_model_name
     user_msg = _build_judge_user_payload(
         query=query,
@@ -182,24 +185,55 @@ async def evaluate_with_llm_judge(
         reference_answer=reference_answer,
     )
 
-    async def _call_model() -> tuple[str, int | None, int | None]:
-        msg = await client.messages.create(
-            model=model_id,
-            max_tokens=1024,
-            system=JUDGE_SYSTEM,
-            messages=[{"role": "user", "content": user_msg}],
-        )
-        text_parts: list[str] = []
-        for block in msg.content:
-            if hasattr(block, "text"):
-                text_parts.append(block.text)
-        raw = "\n".join(text_parts).strip()
-        inp = getattr(msg.usage, "input_tokens", None)
-        out = getattr(msg.usage, "output_tokens", None)
-        return raw, inp, out
+    if provider == "anthropic":
+        client = get_async_anthropic()
+
+        async def _call_model() -> tuple[str, int | None, int | None]:
+            msg = await client.messages.create(
+                model=model_id,
+                max_tokens=1024,
+                system=JUDGE_SYSTEM,
+                messages=[{"role": "user", "content": user_msg}],
+            )
+            text_parts: list[str] = []
+            for block in msg.content:
+                if hasattr(block, "text"):
+                    text_parts.append(block.text)
+            raw = "\n".join(text_parts).strip()
+            inp = getattr(msg.usage, "input_tokens", None)
+            out = getattr(msg.usage, "output_tokens", None)
+            return raw, inp, out
+
+    else:
+        client = get_async_openai()
+
+        async def _call_model() -> tuple[str, int | None, int | None]:
+            completion = await client.chat.completions.create(
+                model=model_id,
+                temperature=0,
+                messages=[
+                    {"role": "system", "content": JUDGE_SYSTEM},
+                    {"role": "user", "content": user_msg},
+                ],
+                response_format={"type": "json_object"},
+            )
+            choice0 = completion.choices[0].message if completion.choices else None
+            raw = (getattr(choice0, "content", None) or "").strip()
+            u = completion.usage
+            inp = getattr(u, "prompt_tokens", None) if u else None
+            out = getattr(u, "completion_tokens", None) if u else None
+            return raw, inp, out
+
+    prov_label = "anthropic" if provider == "anthropic" else "openai"
 
     raw1, inp1, out1 = await _call_model()
-    r1 = _build_result_from_raw(raw1, model_id=model_id, judge_input_tokens=inp1, judge_output_tokens=out1)
+    r1 = _build_result_from_raw(
+        raw1,
+        model_id=model_id,
+        judge_input_tokens=inp1,
+        judge_output_tokens=out1,
+        llm_provider=prov_label,
+    )
     ok1 = bool(r1.metadata_json.get("judge_parse_ok"))
 
     if ok1:
@@ -213,7 +247,13 @@ async def evaluate_with_llm_judge(
         )
 
     raw2, inp2, out2 = await _call_model()
-    r2 = _build_result_from_raw(raw2, model_id=model_id, judge_input_tokens=inp2, judge_output_tokens=out2)
+    r2 = _build_result_from_raw(
+        raw2,
+        model_id=model_id,
+        judge_input_tokens=inp2,
+        judge_output_tokens=out2,
+        llm_provider=prov_label,
+    )
     ok2 = bool(r2.metadata_json.get("judge_parse_ok"))
 
     in_tot = _sum_tokens(inp1, inp2)

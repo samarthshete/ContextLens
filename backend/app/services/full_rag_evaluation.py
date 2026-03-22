@@ -21,11 +21,17 @@ async def execute_llm_judge_and_complete_run(
     run_id: int,
     commit: bool = True,
 ) -> None:
-    """Run Claude judge on stored generation + context; persist evaluation + ``completed``.
+    """Run LLM judge on stored generation + context; persist evaluation + ``completed``.
 
     Expects ``status == generation_completed`` and no ``evaluation_results`` row yet.
     ``total_latency_ms`` = sum of measured retrieval + generation + evaluation phase ms on the run.
-    ``cost_usd`` = estimated generation + judge tokens when pricing config is non-zero.
+    ``cost_usd`` = sum of **generation** + **judge** USD estimates from
+    ``estimate_usd_from_tokens`` (rates follow ``LLM_PROVIDER``: OpenAI vs Anthropic fields in config).
+    If **pricing is disabled** (both input and output rates ≤ 0), both estimates are
+    ``None`` and ``cost_usd`` stays **null** (never written as a fake ``0``).
+    If only one side returns a value, the other is treated as ``0`` in the sum (partial
+    visibility). A **true zero** bill (e.g. zero reported tokens with rates on) is stored
+    as ``0``, not coerced to null.
     """
     run = await session.get(Run, run_id)
     if run is None:
@@ -72,8 +78,6 @@ async def execute_llm_judge_and_complete_run(
     cost_usd: Decimal | None = None
     if gen_cost is not None or judge_cost is not None:
         cost_usd = (gen_cost or Decimal("0")) + (judge_cost or Decimal("0"))
-        if cost_usd == 0:
-            cost_usd = None
 
     meta = dict(ev.metadata_json)
     meta["generation_model"] = gen.model_id

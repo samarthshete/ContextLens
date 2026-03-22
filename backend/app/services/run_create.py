@@ -8,11 +8,15 @@ import time
 from typing import Literal
 
 import anthropic
+from openai import APIError as OpenAIAPIError
+from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import sessionmaker as sync_sessionmaker
 
+from app.config import settings
 from app.database import async_session_maker
 from app.models import Document, PipelineConfig, QueryCase, Run
-from app.services.anthropic_client import require_api_key
+from app.services.llm_provider_keys import require_llm_api_key_for_full_mode
 from app.services.benchmark_run import (
     execute_retrieval_benchmark_run,
     execute_retrieval_for_existing_run,
@@ -41,7 +45,7 @@ class PipelineConfigNotFoundError(LookupError):
 
 
 class FullModeNotConfiguredError(RuntimeError):
-    """Raised when ``eval_mode=full`` but Claude is not configured (e.g. missing API key)."""
+    """Raised when ``eval_mode=full`` but the active LLM provider key is missing."""
 
 
 class DocumentNotFoundError(LookupError):
@@ -71,7 +75,7 @@ async def validate_run_create_prerequisites(
 
     if eval_mode == "full":
         try:
-            require_api_key()
+            require_llm_api_key_for_full_mode()
         except ValueError as e:
             raise FullModeNotConfiguredError(str(e)) from e
 
@@ -88,9 +92,50 @@ async def _mark_run_failed_safe(run_id: int) -> None:
         await session.commit()
 
 
+_sync_mark_failed_engine = None
+
+
+def _sync_database_url_for_psycopg() -> str:
+    """``postgresql+asyncpg://`` → sync driver for RQ callback (no event loop)."""
+    u = settings.database_url
+    if "+asyncpg" in u:
+        return u.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+    if "+psycopg" in u:
+        return u
+    if u.startswith("postgresql://"):
+        return u
+    raise ValueError(f"Unsupported database_url for sync worker callback: {u!r}")
+
+
 def mark_run_failed_sync(run_id: int) -> None:
-    """Sync wrapper for RQ ``on_failure`` (after retries exhausted)."""
-    asyncio.run(_mark_run_failed_safe(run_id))
+    """Persist ``failed`` from RQ ``on_failure`` using a **sync** DB session.
+
+    RQ callbacks may run while an asyncio loop is active elsewhere, and asyncpg pools
+    are loop-bound — ``asyncio.run`` here is unsafe. A short-lived psycopg connection
+    avoids sharing the app's async engine.
+    """
+    global _sync_mark_failed_engine
+    try:
+        if _sync_mark_failed_engine is None:
+            _sync_mark_failed_engine = create_engine(
+                _sync_database_url_for_psycopg(),
+                pool_pre_ping=True,
+            )
+        SyncSession = sync_sessionmaker(
+            _sync_mark_failed_engine,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        with SyncSession() as session:
+            run = session.get(Run, run_id)
+            if run is None:
+                return
+            if run.status == STATUS_COMPLETED:
+                return
+            run.status = STATUS_FAILED
+            session.commit()
+    except Exception:
+        logger.exception("mark_run_failed_sync: failed run_id=%s", run_id)
 
 
 async def run_full_benchmark_pipeline(run_id: int, document_id: int | None) -> None:
@@ -100,7 +145,8 @@ async def run_full_benchmark_pipeline(run_id: int, document_id: int | None) -> N
     - ``running``: run retrieval, then generation, then judge (each phase commits).
     - Mid-pipeline states resume: ``retrieval_completed`` skips retrieval; ``generation_completed`` skips to judge.
 
-    **Retries:** ``anthropic.APIError`` and most ``Exception`` types are re-raised for RQ retry.
+    **Retries:** Provider HTTP errors (``anthropic.APIError``, ``openai.APIError``) and most
+    ``Exception`` types are re-raised for RQ retry.
     ``ValueError`` / ``TypeError`` (precondition / data) mark the run failed and do not retry.
     """
     async with async_session_maker() as session:
@@ -137,8 +183,8 @@ async def run_full_benchmark_pipeline(run_id: int, document_id: int | None) -> N
             if run and run.status == STATUS_GENERATION_COMPLETED:
                 await execute_llm_judge_and_complete_run(session, run_id=run_id, commit=True)
 
-    except anthropic.APIError:
-        logger.exception("Anthropic API error (RQ may retry) run_id=%s", run_id)
+    except (anthropic.APIError, OpenAIAPIError):
+        logger.exception("LLM provider API error (RQ may retry) run_id=%s", run_id)
         raise
     except (ValueError, TypeError):
         logger.exception("Non-retryable error run_id=%s", run_id)

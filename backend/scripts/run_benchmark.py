@@ -4,7 +4,7 @@
 Modes:
 
 - **heuristic** (default): retrieval + ``minimal_retrieval_heuristic_v1`` (no LLM).
-- **full**: retrieval → Claude generation → Claude LLM judge + ``cost_usd`` (when pricing config set).
+- **full**: retrieval → Claude generation → Claude LLM judge + ``cost_usd`` (gen+judge estimate; **NULL** when both Anthropic per-M rates ≤ 0 or usage unknown).
 
 Usage (from ``backend/``)::
 
@@ -124,10 +124,10 @@ async def _main(
     eval_mode: str,
 ) -> None:
     if eval_mode == "full":
-        from app.services.anthropic_client import require_api_key
+        from app.services.llm_provider_keys import require_llm_api_key_for_full_mode
 
         try:
-            require_api_key()
+            require_llm_api_key_for_full_mode()
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)

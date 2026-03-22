@@ -5,12 +5,6 @@
 !.env.example
 !**/.env.example
 
-# Private planning docs (keep local only; do not commit)
-PROJECT.md
-DECISIONS.md
-TASK.md
-CURRENT_STATE.md
-
 # Local databases
 *.sqlite
 *.sqlite3
@@ -69,9 +63,16 @@ Thumbs.db
 htmlcov/
 .pytest_cache/
 .tox/
+test-results/
+frontend/test-results/
+playwright-report/
+
+# Claude Code
+.claude/
 
 # Misc
 *.log
+test.txt
 
 # Uploads
 uploads/

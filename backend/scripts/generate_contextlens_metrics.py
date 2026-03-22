@@ -51,12 +51,18 @@ def render_project_metrics_markdown(m: dict[str, Any]) -> str:
         f"Last updated: {today}",
         "",
         "### Semantics (read first)",
+        "- **N/A vs zero:** In this report, **“not available”** means the value is **undefined or omitted** (Python `None` / SQL `NULL` semantics), **not** the number zero.",
+        "  - **Averages** (scores, latencies, cost averages): if no rows supply non-NULL data for that metric → **not available** (we do **not** print `0` as a fake average).",
+        "  - **Counts** (`benchmark_datasets`, `evaluation_rows_*`, `configs_tested`, …): **`0` is a real count** when the table or filter has no rows.",
+        "  - **`llm_judge_call_rate`**: **not available** when there are **zero** `evaluation_results` rows (denominator 0). If rows exist and none used the LLM judge, the rate is **`0`** (honest zero).",
         "- **total_traced_runs**: runs with ≥1 `retrieval_results` AND ≥1 `evaluation_results` (any evaluator).",
         "- **total_traced_runs_heuristic** / **total_traced_runs_llm**: same, filtered by evaluation row bucket (see `app/domain/evaluator_bucket.py`).",
         "- **Score averages** (`avg_*_heuristic` / `avg_*_llm`): **never blended**; each AVG uses only rows in that bucket.",
-        "- **avg_evaluation_cost_per_run_usd_llm** / **_heuristic**: `AVG(cost_usd)` within that bucket where `cost_usd IS NOT NULL` (heuristic rows are usually NULL).",
+        "- **`cost_usd` (stored):** on full RAG, **generation + judge** token estimates are summed (`app/services/full_rag_evaluation.py`). If **pricing is disabled** (both `ANTHROPIC_*_USD_PER_MILLION_TOKENS` ≤ 0) or usage is unknown, the row keeps **`cost_usd` NULL** — never a fabricated `0` from missing rates.",
+        "- **avg_evaluation_cost_per_run_usd_llm** / **_heuristic**: `AVG(cost_usd)` within that bucket over rows with **`cost_usd IS NOT NULL` only**; all-NULL in a bucket → **not available**.",
         "- **llm_judge_call_rate**: `COUNT(used_llm_judge IS TRUE) / COUNT(evaluation_results)` (all rows).",
         "- **Latency (global)**: `avg_*_latency_ms` over all runs with non-NULL column (may mix evaluators). **Split** evaluation/total latencies: `avg_*_latency_ms_llm` / `_heuristic`.",
+        "- **Failure-type counts:** only rows with non-empty `failure_type` are grouped. An empty list under a bucket means **no such values in that slice**, not “zero failures” unless you also see explicit `NO_FAILURE: N` lines.",
         "",
         "### Dataset / benchmark scale",
     ]
@@ -147,13 +153,25 @@ def render_project_metrics_markdown(m: dict[str, Any]) -> str:
         line(label, f"avg_{col}_heuristic")
 
     lines.extend(["", "### Failure types — LLM rows"])
-    _failure_lines(lines, m.get("failure_type_counts_llm") or {})
+    _failure_lines(
+        lines,
+        m.get("failure_type_counts_llm") or {},
+        bucket_row_count=m.get("evaluation_rows_llm"),
+    )
 
     lines.extend(["", "### Failure types — heuristic rows"])
-    _failure_lines(lines, m.get("failure_type_counts_heuristic") or {})
+    _failure_lines(
+        lines,
+        m.get("failure_type_counts_heuristic") or {},
+        bucket_row_count=m.get("evaluation_rows_heuristic"),
+    )
 
     lines.extend(["", "### Failure types — all rows (audit; do not average across evaluator)"])
-    _failure_lines(lines, m.get("failure_type_counts_all") or {})
+    n_llm, n_h = m.get("evaluation_rows_llm"), m.get("evaluation_rows_heuristic")
+    total_eval = None
+    if n_llm is not None and n_h is not None:
+        total_eval = int(n_llm) + int(n_h)
+    _failure_lines(lines, m.get("failure_type_counts_all") or {}, bucket_row_count=total_eval)
 
     lines.extend(["", "### Cost / efficiency (split by evaluator bucket)"])
     line("avg_evaluation_cost_per_run_usd (llm rows only)", "avg_evaluation_cost_per_run_usd_llm")
@@ -175,9 +193,19 @@ def render_project_metrics_markdown(m: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _failure_lines(lines: list[str], fcounts: dict[str, int]) -> None:
+def _failure_lines(
+    lines: list[str],
+    fcounts: dict[str, int],
+    *,
+    bucket_row_count: int | None = None,
+) -> None:
+    if bucket_row_count is not None and bucket_row_count == 0:
+        lines.append("- _N/A — no evaluation rows in this slice_")
+        return
     if not fcounts:
-        lines.append("- _no failure_type values stored — not available_")
+        lines.append(
+            "- _no non-empty `failure_type` values in this slice (see semantics above)_"
+        )
     else:
         for ft, c in sorted(fcounts.items(), key=lambda x: x[0]):
             lines.append(f"- {ft}: {c}")

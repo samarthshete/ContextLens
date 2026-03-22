@@ -1,0 +1,289 @@
+"""Richer analytics aggregates from stored runs / evaluations (read-only)."""
+
+from __future__ import annotations
+
+from decimal import Decimal
+
+from sqlalchemy import case, func, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import EvaluationResult, PipelineConfig, Run
+from app.schemas.dashboard_analytics import (
+    ConfigInsight,
+    DashboardAnalyticsResponse,
+    FailureAnalysisSection,
+    FailureByConfig,
+    LatencyDistribution,
+    LatencyDistributionSection,
+    RecentFailedRun,
+    TimeSeriesDay,
+)
+
+
+def _f(v: object | None) -> float | None:
+    """Coerce Decimal / numeric DB result to float; None stays None."""
+    if v is None:
+        return None
+    return float(v) if not isinstance(v, float) else v
+
+
+async def _time_series(session: AsyncSession) -> list[TimeSeriesDay]:
+    """Runs aggregated by calendar day (last 90 days max, newest first)."""
+    date_col = func.date(Run.created_at).label("day")
+
+    # Subquery: failure count per run (runs with a non-empty, non-NO_FAILURE failure_type)
+    failure_sub = (
+        select(EvaluationResult.run_id)
+        .where(
+            EvaluationResult.failure_type.isnot(None),
+            EvaluationResult.failure_type != "",
+            EvaluationResult.failure_type != "NO_FAILURE",
+        )
+        .correlate(Run)
+    )
+
+    stmt = (
+        select(
+            date_col,
+            func.count().label("runs"),
+            func.count().filter(Run.status == "completed").label("completed"),
+            func.count().filter(Run.status == "failed").label("failed"),
+            func.avg(Run.total_latency_ms).filter(
+                Run.total_latency_ms.isnot(None)
+            ).label("avg_total_latency_ms"),
+            func.avg(EvaluationResult.cost_usd).filter(
+                EvaluationResult.cost_usd.isnot(None)
+            ).label("avg_cost_usd"),
+            func.count().filter(Run.id.in_(failure_sub)).label("failure_count"),
+        )
+        .outerjoin(EvaluationResult, EvaluationResult.run_id == Run.id)
+        .group_by(date_col)
+        .order_by(date_col.desc())
+        .limit(90)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [
+        TimeSeriesDay(
+            date=str(r.day),
+            runs=int(r.runs),
+            completed=int(r.completed),
+            failed=int(r.failed),
+            avg_total_latency_ms=_f(r.avg_total_latency_ms),
+            avg_cost_usd=_f(r.avg_cost_usd),
+            failure_count=int(r.failure_count),
+        )
+        for r in reversed(rows)  # oldest first for charting
+    ]
+
+
+async def _latency_distribution(session: AsyncSession) -> LatencyDistributionSection:
+    """Min/max/avg/median/p95 for each latency phase."""
+
+    async def _dist(col) -> LatencyDistribution:
+        stmt = select(
+            func.count().filter(col.isnot(None)).label("cnt"),
+            func.min(col).label("min_v"),
+            func.max(col).label("max_v"),
+            func.avg(col).label("avg_v"),
+            func.percentile_cont(0.5).within_group(col).label("median_v"),
+            func.percentile_cont(0.95).within_group(col).label("p95_v"),
+        ).select_from(Run)
+        row = (await session.execute(stmt)).one()
+        cnt = int(row.cnt)
+        if cnt == 0:
+            return LatencyDistribution()
+        return LatencyDistribution(
+            count=cnt,
+            min_ms=_f(row.min_v),
+            max_ms=_f(row.max_v),
+            avg_ms=_f(row.avg_v),
+            median_ms=_f(row.median_v),
+            p95_ms=_f(row.p95_v),
+        )
+
+    return LatencyDistributionSection(
+        retrieval=await _dist(Run.retrieval_latency_ms),
+        generation=await _dist(Run.generation_latency_ms),
+        evaluation=await _dist(Run.evaluation_latency_ms),
+        total=await _dist(Run.total_latency_ms),
+    )
+
+
+async def _failure_analysis(session: AsyncSession) -> FailureAnalysisSection:
+    """Overall failure counts/percentages, per-config breakdown, recent failed runs."""
+
+    # Overall failure counts
+    fail_rows = (
+        await session.execute(
+            select(EvaluationResult.failure_type, func.count())
+            .where(
+                EvaluationResult.failure_type.isnot(None),
+                EvaluationResult.failure_type != "",
+                EvaluationResult.failure_type != "NO_FAILURE",
+            )
+            .group_by(EvaluationResult.failure_type)
+        )
+    ).all()
+    overall_counts = {str(ft): int(c) for ft, c in fail_rows}
+    total_failures = sum(overall_counts.values())
+    overall_percentages = (
+        {k: round(v / total_failures * 100, 1) for k, v in overall_counts.items()}
+        if total_failures > 0
+        else {}
+    )
+
+    # Per-config failure breakdown
+    config_fail_rows = (
+        await session.execute(
+            select(
+                Run.pipeline_config_id,
+                PipelineConfig.name,
+                EvaluationResult.failure_type,
+                func.count().label("cnt"),
+            )
+            .join(EvaluationResult, EvaluationResult.run_id == Run.id)
+            .join(PipelineConfig, PipelineConfig.id == Run.pipeline_config_id)
+            .where(
+                EvaluationResult.failure_type.isnot(None),
+                EvaluationResult.failure_type != "",
+                EvaluationResult.failure_type != "NO_FAILURE",
+            )
+            .group_by(Run.pipeline_config_id, PipelineConfig.name, EvaluationResult.failure_type)
+            .order_by(Run.pipeline_config_id)
+        )
+    ).all()
+    config_map: dict[int, FailureByConfig] = {}
+    for pc_id, pc_name, ft, cnt in config_fail_rows:
+        if pc_id not in config_map:
+            config_map[pc_id] = FailureByConfig(
+                pipeline_config_id=pc_id,
+                pipeline_config_name=pc_name,
+            )
+        config_map[pc_id].failure_counts[str(ft)] = int(cnt)
+        config_map[pc_id].total_failures += int(cnt)
+
+    # Recent failed runs (last 10)
+    recent_stmt = (
+        select(Run.id, Run.status, Run.created_at, Run.pipeline_config_id, EvaluationResult.failure_type)
+        .outerjoin(EvaluationResult, EvaluationResult.run_id == Run.id)
+        .where(Run.status == "failed")
+        .order_by(Run.created_at.desc(), Run.id.desc())
+        .limit(10)
+    )
+    recent_rows = (await session.execute(recent_stmt)).all()
+    recent_failed = [
+        RecentFailedRun(
+            run_id=r[0],
+            status=r[1],
+            created_at=str(r[2]),
+            failure_type=r[4],
+            pipeline_config_id=r[3],
+        )
+        for r in recent_rows
+    ]
+
+    return FailureAnalysisSection(
+        overall_counts=overall_counts,
+        overall_percentages=overall_percentages,
+        by_config=list(config_map.values()),
+        recent_failed_runs=recent_failed,
+    )
+
+
+async def _config_insights(session: AsyncSession) -> list[ConfigInsight]:
+    """Per-config aggregate metrics with scores and top failure type."""
+    stmt = (
+        select(
+            PipelineConfig.id,
+            PipelineConfig.name,
+            func.count(Run.id).label("traced_runs"),
+            func.count().filter(Run.status == "completed").label("completed_runs"),
+            func.count().filter(Run.status == "failed").label("failed_runs"),
+            func.avg(Run.total_latency_ms).filter(
+                Run.total_latency_ms.isnot(None)
+            ).label("avg_total_latency_ms"),
+            func.min(Run.total_latency_ms).label("min_total_latency_ms"),
+            func.max(Run.total_latency_ms).label("max_total_latency_ms"),
+            func.avg(EvaluationResult.cost_usd).filter(
+                EvaluationResult.cost_usd.isnot(None)
+            ).label("avg_cost_usd"),
+            func.sum(EvaluationResult.cost_usd).filter(
+                EvaluationResult.cost_usd.isnot(None)
+            ).label("total_cost_usd"),
+            func.avg(EvaluationResult.retrieval_relevance).filter(
+                EvaluationResult.retrieval_relevance.isnot(None)
+            ).label("avg_retrieval_relevance"),
+            func.avg(EvaluationResult.context_coverage).filter(
+                EvaluationResult.context_coverage.isnot(None)
+            ).label("avg_context_coverage"),
+            func.avg(EvaluationResult.completeness).filter(
+                EvaluationResult.completeness.isnot(None)
+            ).label("avg_completeness"),
+            func.avg(EvaluationResult.faithfulness).filter(
+                EvaluationResult.faithfulness.isnot(None)
+            ).label("avg_faithfulness"),
+            func.max(Run.created_at).label("latest_run_at"),
+        )
+        .join(Run, Run.pipeline_config_id == PipelineConfig.id)
+        .outerjoin(EvaluationResult, EvaluationResult.run_id == Run.id)
+        .group_by(PipelineConfig.id, PipelineConfig.name)
+        .order_by(PipelineConfig.id)
+    )
+    rows = (await session.execute(stmt)).all()
+
+    # Top failure type per config (separate query for simplicity)
+    top_fail_stmt = (
+        select(
+            Run.pipeline_config_id,
+            EvaluationResult.failure_type,
+            func.count().label("cnt"),
+        )
+        .join(EvaluationResult, EvaluationResult.run_id == Run.id)
+        .where(
+            EvaluationResult.failure_type.isnot(None),
+            EvaluationResult.failure_type != "",
+            EvaluationResult.failure_type != "NO_FAILURE",
+        )
+        .group_by(Run.pipeline_config_id, EvaluationResult.failure_type)
+    )
+    top_fail_rows = (await session.execute(top_fail_stmt)).all()
+    # Find top failure per config
+    top_fail_map: dict[int, str] = {}
+    max_counts: dict[int, int] = {}
+    for pc_id, ft, cnt in top_fail_rows:
+        cnt_int = int(cnt)
+        if pc_id not in max_counts or cnt_int > max_counts[pc_id]:
+            max_counts[pc_id] = cnt_int
+            top_fail_map[pc_id] = str(ft)
+
+    return [
+        ConfigInsight(
+            pipeline_config_id=r.id,
+            pipeline_config_name=r.name,
+            traced_runs=int(r.traced_runs),
+            completed_runs=int(r.completed_runs),
+            failed_runs=int(r.failed_runs),
+            avg_total_latency_ms=_f(r.avg_total_latency_ms),
+            min_total_latency_ms=_f(r.min_total_latency_ms),
+            max_total_latency_ms=_f(r.max_total_latency_ms),
+            avg_cost_usd=_f(r.avg_cost_usd),
+            total_cost_usd=_f(r.total_cost_usd),
+            avg_retrieval_relevance=_f(r.avg_retrieval_relevance),
+            avg_context_coverage=_f(r.avg_context_coverage),
+            avg_completeness=_f(r.avg_completeness),
+            avg_faithfulness=_f(r.avg_faithfulness),
+            latest_run_at=str(r.latest_run_at) if r.latest_run_at else None,
+            top_failure_type=top_fail_map.get(r.id),
+        )
+        for r in rows
+    ]
+
+
+async def get_dashboard_analytics(session: AsyncSession) -> DashboardAnalyticsResponse:
+    """Compute all analytics sections."""
+    return DashboardAnalyticsResponse(
+        time_series=await _time_series(session),
+        latency_distribution=await _latency_distribution(session),
+        failure_analysis=await _failure_analysis(session),
+        config_insights=await _config_insights(session),
+    )

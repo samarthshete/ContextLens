@@ -18,7 +18,7 @@ async def execute_generation_for_run(
     run_id: int,
     commit: bool = True,
 ) -> GenerationResult:
-    """Load retrieval chunks, call Claude, store ``generation_results``, set latencies/status.
+    """Load retrieval chunks, call the configured LLM, store ``generation_results``, set latencies/status.
 
     Expects ``run.status == retrieval_completed`` and no existing ``GenerationResult``.
     Sets ``run.generation_latency_ms`` and ``run.status = generation_completed``.

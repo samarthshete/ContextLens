@@ -98,7 +98,7 @@ Without this service, route handlers would duplicate the multi-step flow (retrie
 
 **Responsibility**  
 1. Validate that **foreign keys exist** (`QueryCase`, `PipelineConfig`, and if provided **`Document`**).  
-2. For `full` mode, ensure Claude is configured (`require_api_key`).  
+2. For `full` mode, ensure the active LLM provider key is configured (`require_llm_api_key_for_full_mode`).  
 3. Call existing benchmark functions **in order**, with **`commit=False`** on inner steps, then **one `commit`** at the end.  
 4. Return the final **`Run`** ORM object (refreshed).
 
@@ -106,7 +106,7 @@ Without this service, route handlers would duplicate the multi-step flow (retrie
 1. `session.get(QueryCase, query_case_id)` → missing → `QueryCaseNotFoundError`.  
 2. `session.get(PipelineConfig, pipeline_config_id)` → missing → `PipelineConfigNotFoundError`.  
 3. **If `document_id` is not `None`:** `session.get(Document, document_id)` → missing → `DocumentNotFoundError`. *(This runs **before** creating a run row—no orphan run.)*  
-4. If `eval_mode == "full"`: `require_api_key()` → failure → `FullModeNotConfiguredError`.  
+4. If `eval_mode == "full"`: `require_llm_api_key_for_full_mode()` → failure → `FullModeNotConfiguredError`.  
 5. `execute_retrieval_benchmark_run(..., document_id=document_id, commit=False)` — creates run, runs `search_chunks` with that scope, stores retrieval rows, sets `retrieval_completed`.  
 6. **Heuristic branch:** time `compute_minimal_retrieval_evaluation`, then `persist_evaluation_and_complete_run(..., commit=False)`.  
 7. **Full branch:** `execute_generation_for_run`, then `execute_llm_judge_and_complete_run`, both `commit=False`.  
@@ -423,7 +423,7 @@ The project already had **scripts** + **services** for benchmark execution. This
 ### Handled failure cases
 
 - Missing query case, pipeline config, document (when provided) → **404**.  
-- Full mode without API key → **503** with message from `require_api_key`.  
+- Full mode without API key → **503** with message from `require_llm_api_key_for_full_mode`.  
 - Anthropic errors on full path → **502**.  
 - Malformed JSON / bad `eval_mode` → **422** (Pydantic).  
 - Invalid `dataset_id` on query-case list → **404**.

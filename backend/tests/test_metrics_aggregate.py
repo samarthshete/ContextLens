@@ -148,3 +148,234 @@ async def test_aggregate_metrics_matches_seeded_latencies_and_counts():
 
     assert m["p95_retrieval_latency_ms"] is not None
     assert 100 <= m["p95_retrieval_latency_ms"] <= 300
+
+
+@pytest.mark.asyncio
+async def test_aggregate_llm_judge_rate_undefined_without_evaluation_rows():
+    async with async_session_maker() as session:
+        ds = Dataset(name="m_na", description="")
+        session.add(ds)
+        await session.flush()
+        qc = QueryCase(dataset_id=ds.id, query_text="q", metadata_json={})
+        pc = PipelineConfig(
+            name="m_pc",
+            embedding_model="all-MiniLM-L6-v2",
+            chunk_strategy="fixed",
+            chunk_size=100,
+            chunk_overlap=0,
+            top_k=3,
+        )
+        session.add_all([qc, pc])
+        await session.flush()
+        r = Run(
+            query_case_id=qc.id,
+            pipeline_config_id=pc.id,
+            status=STATUS_COMPLETED,
+            retrieval_latency_ms=10,
+            evaluation_latency_ms=5,
+            total_latency_ms=15,
+        )
+        session.add(r)
+        await session.flush()
+        doc = Document(
+            title="d.txt",
+            source_type="txt",
+            file_path="seed://na_rate",
+            raw_text="x",
+            status="processed",
+        )
+        session.add(doc)
+        await session.flush()
+        ch = Chunk(
+            document_id=doc.id,
+            content="x",
+            chunk_index=0,
+            start_char=0,
+            end_char=1,
+        )
+        session.add(ch)
+        await session.flush()
+        session.add(RetrievalResult(run_id=r.id, chunk_id=ch.id, rank=1, score=0.5))
+        await session.commit()
+
+    async with engine.connect() as conn:
+        m = await aggregate_all_metrics(conn)
+
+    assert m.get("llm_judge_call_rate") is None
+    assert m.get("evaluation_rows_llm") == 0
+    assert m.get("evaluation_rows_heuristic") == 0
+
+
+@pytest.mark.asyncio
+async def test_aggregate_cost_averages_null_when_all_cost_usd_null():
+    async with async_session_maker() as session:
+        ds = Dataset(name="m_cost", description="")
+        session.add(ds)
+        await session.flush()
+        qc = QueryCase(dataset_id=ds.id, query_text="q", metadata_json={})
+        pc = PipelineConfig(
+            name="m_pc2",
+            embedding_model="all-MiniLM-L6-v2",
+            chunk_strategy="fixed",
+            chunk_size=100,
+            chunk_overlap=0,
+            top_k=3,
+        )
+        session.add_all([qc, pc])
+        await session.flush()
+        doc = Document(
+            title="c.txt",
+            source_type="txt",
+            file_path="seed://cost_null",
+            raw_text="y",
+            status="processed",
+        )
+        session.add(doc)
+        await session.flush()
+        ch = Chunk(
+            document_id=doc.id,
+            content="y",
+            chunk_index=0,
+            start_char=0,
+            end_char=1,
+        )
+        session.add(ch)
+        await session.flush()
+        r1 = Run(
+            query_case_id=qc.id,
+            pipeline_config_id=pc.id,
+            status=STATUS_COMPLETED,
+            retrieval_latency_ms=10,
+            evaluation_latency_ms=5,
+            total_latency_ms=15,
+        )
+        r2 = Run(
+            query_case_id=qc.id,
+            pipeline_config_id=pc.id,
+            status=STATUS_COMPLETED,
+            retrieval_latency_ms=20,
+            evaluation_latency_ms=5,
+            total_latency_ms=25,
+        )
+        session.add_all([r1, r2])
+        await session.flush()
+        session.add_all(
+            [
+                RetrievalResult(run_id=r1.id, chunk_id=ch.id, rank=1, score=0.5),
+                RetrievalResult(run_id=r2.id, chunk_id=ch.id, rank=1, score=0.5),
+            ]
+        )
+        session.add_all(
+            [
+                EvaluationResult(
+                    run_id=r1.id,
+                    faithfulness=0.5,
+                    completeness=0.5,
+                    retrieval_relevance=0.5,
+                    context_coverage=0.5,
+                    failure_type="NO_FAILURE",
+                    used_llm_judge=False,
+                    metadata_json={"evaluator_type": "heuristic"},
+                    cost_usd=None,
+                ),
+                EvaluationResult(
+                    run_id=r2.id,
+                    faithfulness=0.6,
+                    completeness=0.6,
+                    retrieval_relevance=0.6,
+                    context_coverage=0.6,
+                    failure_type="NO_FAILURE",
+                    used_llm_judge=True,
+                    metadata_json={"evaluator_type": "llm"},
+                    cost_usd=None,
+                ),
+            ]
+        )
+        await session.commit()
+
+    async with engine.connect() as conn:
+        m = await aggregate_all_metrics(conn)
+
+    assert m["avg_evaluation_cost_per_run_usd_heuristic"] is None
+    assert m["avg_evaluation_cost_per_run_usd_llm"] is None
+    assert m["llm_judge_call_rate"] == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_aggregate_llm_judge_rate_zero_when_no_llm_rows():
+    async with async_session_maker() as session:
+        ds = Dataset(name="m_zero", description="")
+        session.add(ds)
+        await session.flush()
+        qc = QueryCase(dataset_id=ds.id, query_text="q", metadata_json={})
+        pc = PipelineConfig(
+            name="m_pc3",
+            embedding_model="all-MiniLM-L6-v2",
+            chunk_strategy="fixed",
+            chunk_size=100,
+            chunk_overlap=0,
+            top_k=3,
+        )
+        session.add_all([qc, pc])
+        await session.flush()
+        doc = Document(
+            title="z.txt",
+            source_type="txt",
+            file_path="seed://rate_zero",
+            raw_text="z",
+            status="processed",
+        )
+        session.add(doc)
+        await session.flush()
+        ch = Chunk(
+            document_id=doc.id,
+            content="z",
+            chunk_index=0,
+            start_char=0,
+            end_char=1,
+        )
+        session.add(ch)
+        await session.flush()
+        runs = [
+            Run(
+                query_case_id=qc.id,
+                pipeline_config_id=pc.id,
+                status=STATUS_COMPLETED,
+                retrieval_latency_ms=10,
+                evaluation_latency_ms=5,
+                total_latency_ms=15,
+            ),
+            Run(
+                query_case_id=qc.id,
+                pipeline_config_id=pc.id,
+                status=STATUS_COMPLETED,
+                retrieval_latency_ms=10,
+                evaluation_latency_ms=5,
+                total_latency_ms=15,
+            ),
+        ]
+        session.add_all(runs)
+        await session.flush()
+        for r in runs:
+            session.add(RetrievalResult(run_id=r.id, chunk_id=ch.id, rank=1, score=0.5))
+            session.add(
+                EvaluationResult(
+                    run_id=r.id,
+                    faithfulness=0.5,
+                    completeness=0.5,
+                    retrieval_relevance=0.5,
+                    context_coverage=0.5,
+                    failure_type="NO_FAILURE",
+                    used_llm_judge=False,
+                    metadata_json={"evaluator_type": "heuristic"},
+                    cost_usd=None,
+                )
+            )
+        await session.commit()
+
+    async with engine.connect() as conn:
+        m = await aggregate_all_metrics(conn)
+
+    assert m["llm_judge_call_rate"] == pytest.approx(0.0)
+    assert m["evaluation_rows_llm"] == 0
+    assert m["evaluation_rows_heuristic"] == 2
