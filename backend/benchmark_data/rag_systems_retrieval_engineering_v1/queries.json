@@ -1,0 +1,42 @@
+[
+  {
+    "id": 1,
+    "query_text": "What are the trade-offs between HNSW and brute-force search?",
+    "expected_answer": "HNSW improves speed and latency but sacrifices exact accuracy, while brute-force guarantees exact results but is computationally expensive."
+  },
+  {
+    "id": 2,
+    "query_text": "Why can RAG systems return incomplete answers even when retrieval works?",
+    "expected_answer": "Because the model may omit information, misinterpret context, or relevant information may be split across chunks."
+  },
+  {
+    "id": 3,
+    "query_text": "How does chunk size affect retrieval performance?",
+    "expected_answer": "Small chunks improve precision but risk losing context, while large chunks preserve context but may introduce irrelevant information."
+  },
+  {
+    "id": 4,
+    "query_text": "What causes context truncation in RAG systems?",
+    "expected_answer": "When the input exceeds the model's token limit, causing some retrieved content to be dropped."
+  },
+  {
+    "id": 5,
+    "query_text": "How can latency be reduced in a RAG pipeline?",
+    "expected_answer": "By reducing top_k, optimizing retrieval structures, caching, batching, and choosing smaller models."
+  },
+  {
+    "id": 6,
+    "query_text": "What are common failure modes in RAG systems?",
+    "expected_answer": "Retrieval miss, retrieval partial, context truncation, chunk fragmentation, hallucination, and incomplete answers."
+  },
+  {
+    "id": 7,
+    "query_text": "Why might a system retrieve correct documents but still hallucinate?",
+    "expected_answer": "Because the model may misinterpret the context or generate unsupported content despite correct retrieval."
+  },
+  {
+    "id": 8,
+    "query_text": "What is the difference between faithfulness and completeness?",
+    "expected_answer": "Faithfulness measures whether the answer is supported by evidence, while completeness measures whether the answer fully covers the query."
+  }
+]

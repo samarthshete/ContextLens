@@ -1,0 +1,5 @@
+Vector databases store high-dimensional embeddings and enable similarity search. Unlike traditional databases, they are optimized for nearest neighbor queries using distance metrics such as cosine similarity or Euclidean distance.
+
+A key advantage of vector databases is their ability to retrieve semantically similar content even when the query does not match exact keywords. This makes them ideal for applications such as semantic search, recommendation systems, and retrieval-augmented generation (RAG).
+
+However, vector search introduces trade-offs between speed and accuracy. Exact nearest neighbor search guarantees correctness but is computationally expensive. Approximate methods improve performance but may return slightly suboptimal results.

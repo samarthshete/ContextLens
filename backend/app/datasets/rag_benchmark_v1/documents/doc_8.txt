@@ -1,0 +1,5 @@
+Prompt design plays a critical role in RAG performance. Clear instructions help the model use retrieved context effectively.
+
+Poor prompts can lead to hallucination or incomplete answers. Including too much context may overwhelm the model, while too little context reduces answer quality.
+
+Effective prompts balance instruction clarity and context length.

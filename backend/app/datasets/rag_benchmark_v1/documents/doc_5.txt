@@ -1,0 +1,5 @@
+RAG systems exhibit several failure modes. Retrieval miss occurs when relevant documents are not retrieved. Retrieval partial happens when only part of the required information is retrieved.
+
+Context truncation occurs when the input exceeds the model’s token limit, causing important content to be dropped. Chunk fragmentation happens when relevant information is split across multiple chunks.
+
+Generation failures include hallucination, unsupported answers, and incomplete responses. These failures can occur even when retrieval is correct.

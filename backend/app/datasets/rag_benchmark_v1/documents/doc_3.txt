@@ -1,0 +1,5 @@
+Hierarchical Navigable Small World (HNSW) is a graph-based approximate nearest neighbor algorithm. It organizes vectors in multiple layers to allow efficient navigation during search.
+
+HNSW significantly improves search latency compared to brute-force methods while maintaining high recall. However, it does not guarantee exact results.
+
+The trade-off is between speed and accuracy. Increasing graph connectivity improves recall but increases memory usage and indexing time.

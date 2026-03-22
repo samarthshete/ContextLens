@@ -1,0 +1,5 @@
+Latency in RAG systems comes from retrieval, generation, and evaluation stages. Retrieval latency depends on index structure and dataset size.
+
+Generation latency is influenced by model size and token count. Evaluation latency adds additional overhead if LLM-based scoring is used.
+
+Optimizing latency requires trade-offs. Reducing top_k decreases retrieval cost but may hurt answer quality. Caching and batching can improve performance.

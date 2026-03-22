@@ -1,0 +1,5 @@
+Retrieval-Augmented Generation (RAG) combines document retrieval with language model generation. The system retrieves relevant chunks and feeds them into a language model to produce an answer.
+
+RAG systems can fail when retrieval is incomplete or when the model misinterprets the context. Even if retrieval succeeds, the model may hallucinate or omit critical information.
+
+Effective RAG design requires balancing retrieval quality, prompt design, and model behavior.

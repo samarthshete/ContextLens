@@ -1,0 +1,5 @@
+Embedding models convert text into numerical vectors. The quality of embeddings significantly impacts retrieval performance.
+
+Chunking refers to splitting documents into smaller segments before embedding. Smaller chunks increase retrieval precision but risk losing context. Larger chunks preserve context but may reduce relevance due to noise.
+
+Choosing the right chunk size is critical. If chunks are too small, the system may retrieve incomplete information. If chunks are too large, the retrieval system may return irrelevant sections.

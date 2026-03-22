@@ -1,0 +1,5 @@
+Evaluating RAG systems involves measuring both retrieval quality and generation quality. Metrics include faithfulness, completeness, and context coverage.
+
+Faithfulness measures whether the answer is supported by retrieved evidence. Completeness measures whether the answer fully addresses the query.
+
+Evaluation can be heuristic or model-based. Heuristic methods are faster but less flexible. LLM-based evaluation provides deeper insights but introduces cost and variability.

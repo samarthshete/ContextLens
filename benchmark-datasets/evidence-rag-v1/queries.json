@@ -1,0 +1,34 @@
+[
+  {
+    "query_text": "When should a shared cache revalidate a cached response using validators like ETag?",
+    "expected_answer": "revalidate the cached entry with the origin when a validator such as ETag or Last-Modified is present"
+  },
+  {
+    "query_text": "What is the role of WAL in PostgreSQL crash recovery?",
+    "expected_answer": "durability across crashes by replaying committed records from the log"
+  },
+  {
+    "query_text": "How does the OAuth2 client credentials grant obtain an access token?",
+    "expected_answer": "client_id and client_secret to the token endpoint"
+  },
+  {
+    "query_text": "Why might a team choose gRPC over REST for internal service-to-service calls?",
+    "expected_answer": "binary framing and HTTP/2 multiplexing can reduce per-call overhead"
+  },
+  {
+    "query_text": "What problem do idempotency keys solve in payment APIs?",
+    "expected_answer": "duplicate submissions of the same logical payment intent"
+  },
+  {
+    "query_text": "What happens during the TLS handshake before application data is encrypted?",
+    "expected_answer": "Cipher suite negotiation and key exchange establish shared session keys"
+  },
+  {
+    "query_text": "What tradeoff does an HNSW graph index make for approximate nearest neighbor search?",
+    "expected_answer": "build-time memory and insertion cost for faster query latency at high recall"
+  },
+  {
+    "query_text": "Why index structured log fields instead of only storing raw text lines?",
+    "expected_answer": "filter and aggregate by service, trace_id, or error_code without parsing ad hoc"
+  }
+]

@@ -1,0 +1,15 @@
+{
+  "version": "1",
+  "dataset_slug": "evidence-rag-v1",
+  "description": "Multi-topic technical mini-corpus for evidence-backed RAG benchmarking.",
+  "corpus_files": [
+    "corpus/01-http-caching-and-validation.md",
+    "corpus/02-postgres-wal-checkpoints.md",
+    "corpus/03-oauth2-client-credentials.md",
+    "corpus/04-grpc-vs-rest.md",
+    "corpus/05-idempotency-keys.md",
+    "corpus/06-tls-handshake-basics.md",
+    "corpus/07-vector-index-hnsw.md",
+    "corpus/08-structured-logging.md"
+  ]
+}

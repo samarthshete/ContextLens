@@ -1,0 +1,15 @@
+{
+  "version": "1",
+  "dataset_slug": "rag_systems_retrieval_engineering_v1",
+  "description": "Eight-topic corpus on vector retrieval, RAG, evaluation, and latency (grounded queries for benchmark runs).",
+  "corpus_files": [
+    "corpus/01-vector-databases-overview.md",
+    "corpus/02-embedding-models-and-chunking.md",
+    "corpus/03-approximate-nearest-neighbor-hnsw.md",
+    "corpus/04-rag-architecture.md",
+    "corpus/05-failure-modes-in-rag.md",
+    "corpus/06-evaluation-of-rag-systems.md",
+    "corpus/07-latency-optimization.md",
+    "corpus/08-prompt-design-in-rag.md"
+  ]
+}
