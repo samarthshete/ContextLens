@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { installApiMetaRoute } from './fixtures'
 
 const RUN_ROW: Record<string, unknown> = {
   status: 'completed',
@@ -15,6 +16,7 @@ const RUN_ROW: Record<string, unknown> = {
 }
 
 async function mockRunsListApi(page: Page) {
+  await installApiMetaRoute(page)
   await page.route('**/api/v1/datasets', (route) =>
     route.fulfill({
       json: [{ id: 1, name: 'DS', description: null, created_at: '2026-01-01T00:00:00Z' }],

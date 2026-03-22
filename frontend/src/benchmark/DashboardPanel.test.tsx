@@ -2,7 +2,8 @@
 import '@testing-library/jest-dom/vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { DashboardSummaryResponse } from '../api/types'
+import type { ConfigComparisonMetrics, DashboardSummaryResponse } from '../api/types'
+import { emptyConfigComparisonBoth, nullScoreSummary } from './configComparisonMock'
 import { DashboardPanel } from './DashboardPanel'
 import * as exportDownload from './exportDownload'
 
@@ -34,6 +35,8 @@ function minimalAnalytics() {
       evaluation: { count: 0, min_ms: null, max_ms: null, avg_ms: null, median_ms: null, p95_ms: null },
       total: { count: 0, min_ms: null, max_ms: null, avg_ms: null, median_ms: null, p95_ms: null },
     },
+    end_to_end_run_latency_avg_sec: null,
+    end_to_end_run_latency_p95_sec: null,
     failure_analysis: {
       overall_counts: {},
       overall_percentages: {},
@@ -44,22 +47,59 @@ function minimalAnalytics() {
   }
 }
 
+function minimalCompareRow(over: Partial<ConfigComparisonMetrics> = {}): ConfigComparisonMetrics {
+  return {
+    pipeline_config_id: 1,
+    traced_runs: 0,
+    avg_faithfulness: null,
+    avg_retrieval_latency_ms: null,
+    p95_retrieval_latency_ms: null,
+    avg_evaluation_latency_ms: null,
+    p95_evaluation_latency_ms: null,
+    avg_total_latency_ms: null,
+    p95_total_latency_ms: null,
+    avg_groundedness: null,
+    avg_completeness: null,
+    avg_retrieval_relevance: null,
+    avg_context_coverage: null,
+    failure_type_counts: {},
+    avg_evaluation_cost_per_run_usd: null,
+    ...over,
+  }
+}
+
 function minimalDashboard(over: Partial<DashboardSummaryResponse> = {}): DashboardSummaryResponse {
   return {
     total_runs: 1,
+    scale: {
+      benchmark_datasets: 1,
+      total_queries: 3,
+      total_traced_runs: 0,
+      configs_tested: 1,
+      documents_processed: 2,
+      chunks_indexed: 8,
+    },
     status_counts: { completed: 1, failed: 0, in_progress: 0 },
     evaluator_counts: { heuristic_runs: 1, llm_runs: 0, runs_without_evaluation: 0 },
     latency: {
       avg_retrieval_latency_ms: 10,
+      retrieval_latency_p50_ms: 10,
+      retrieval_latency_p95_ms: 10,
       avg_generation_latency_ms: null,
       avg_evaluation_latency_ms: 5,
       avg_total_latency_ms: 15,
+      end_to_end_run_latency_avg_sec: 0.015,
+      end_to_end_run_latency_p95_sec: 0.015,
     },
     cost: {
       total_cost_usd: null,
       avg_cost_usd: null,
       evaluation_rows_with_cost: 0,
       evaluation_rows_cost_not_available: 1,
+      avg_cost_usd_per_llm_run: null,
+      llm_runs_with_measured_cost: 0,
+      avg_cost_usd_per_full_rag_run: null,
+      full_rag_runs_with_measured_cost: 0,
     },
     failure_type_counts: {},
     recent_runs: [
@@ -86,15 +126,96 @@ describe('DashboardPanel', () => {
     cleanup()
   })
 
+  it('renders per-run LLM cost lines from dashboard summary', async () => {
+    dashboardSummary.mockResolvedValue(
+      minimalDashboard({
+        cost: {
+          total_cost_usd: 0.2,
+          avg_cost_usd: 0.1,
+          evaluation_rows_with_cost: 2,
+          evaluation_rows_cost_not_available: 0,
+          avg_cost_usd_per_llm_run: 0.1,
+          llm_runs_with_measured_cost: 2,
+          avg_cost_usd_per_full_rag_run: 0.15,
+          full_rag_runs_with_measured_cost: 1,
+        },
+      }),
+    )
+    dashboardAnalytics.mockResolvedValue(minimalAnalytics())
+    configComparison.mockResolvedValue(emptyConfigComparisonBoth({ pipeline_config_ids: [1] }))
+    render(<DashboardPanel pipelineConfigIds={[1]} />)
+    await waitFor(() => expect(screen.queryByText(/Loading dashboard/)).not.toBeInTheDocument())
+    expect(screen.getByText(/Average per LLM run \(measured cost only\)/i)).toBeInTheDocument()
+    expect(screen.getByText(/Average per full RAG run/i)).toBeInTheDocument()
+    expect(screen.getByText(/\(2 runs with non-null cost/i)).toBeInTheDocument()
+  })
+
+  it('renders system scale metrics from dashboard summary', async () => {
+    dashboardSummary.mockResolvedValue(minimalDashboard())
+    dashboardAnalytics.mockResolvedValue(minimalAnalytics())
+    configComparison.mockResolvedValue(emptyConfigComparisonBoth({ pipeline_config_ids: [1] }))
+    render(<DashboardPanel pipelineConfigIds={[1]} />)
+    await waitFor(() => expect(screen.queryByText(/Loading dashboard/)).not.toBeInTheDocument())
+    const scale = screen.getByTestId('dashboard-system-scale')
+    expect(within(scale).getByText('Benchmark datasets')).toBeInTheDocument()
+    expect(within(scale).getByText('3')).toBeInTheDocument() // total_queries
+    expect(within(scale).getByText('8')).toBeInTheDocument() // chunks_indexed
+  })
+
+  it('renders retrieval mean, P50, and P95 from dashboard summary', async () => {
+    dashboardSummary.mockResolvedValue(
+      minimalDashboard({
+        latency: {
+          avg_retrieval_latency_ms: 42,
+          retrieval_latency_p50_ms: 40,
+          retrieval_latency_p95_ms: 88,
+          avg_generation_latency_ms: null,
+          avg_evaluation_latency_ms: 5,
+          avg_total_latency_ms: 120,
+          end_to_end_run_latency_avg_sec: 0.12,
+          end_to_end_run_latency_p95_sec: 0.12,
+        },
+      }),
+    )
+    dashboardAnalytics.mockResolvedValue(minimalAnalytics())
+    configComparison.mockResolvedValue(emptyConfigComparisonBoth({ pipeline_config_ids: [1] }))
+    render(<DashboardPanel pipelineConfigIds={[1]} />)
+    await waitFor(() => expect(screen.queryByText(/Loading dashboard/)).not.toBeInTheDocument())
+    const retrieval = screen.getByTestId('dashboard-retrieval-latency')
+    expect(within(retrieval).getByText('42 ms')).toBeInTheDocument()
+    expect(within(retrieval).getByText('40 ms')).toBeInTheDocument()
+    expect(within(retrieval).getByText('88 ms')).toBeInTheDocument()
+  })
+
+  it('renders end-to-end mean (ms) and avg/p95 (s) from dashboard summary', async () => {
+    dashboardSummary.mockResolvedValue(
+      minimalDashboard({
+        latency: {
+          avg_retrieval_latency_ms: 10,
+          retrieval_latency_p50_ms: 10,
+          retrieval_latency_p95_ms: 10,
+          avg_generation_latency_ms: null,
+          avg_evaluation_latency_ms: 5,
+          avg_total_latency_ms: 1500,
+          end_to_end_run_latency_avg_sec: 1.5,
+          end_to_end_run_latency_p95_sec: 2.25,
+        },
+      }),
+    )
+    dashboardAnalytics.mockResolvedValue(minimalAnalytics())
+    configComparison.mockResolvedValue(emptyConfigComparisonBoth({ pipeline_config_ids: [1] }))
+    render(<DashboardPanel pipelineConfigIds={[1]} />)
+    await waitFor(() => expect(screen.queryByText(/Loading dashboard/)).not.toBeInTheDocument())
+    const block = screen.getByTestId('dashboard-end-to-end-latency')
+    expect(within(block).getByText('1500 ms')).toBeInTheDocument()
+    expect(within(block).getByText('1.500 s')).toBeInTheDocument()
+    expect(within(block).getByText('2.250 s')).toBeInTheDocument()
+  })
+
   it('shows loading then summary cards from API', async () => {
     dashboardSummary.mockResolvedValue(minimalDashboard())
     dashboardAnalytics.mockResolvedValue(minimalAnalytics())
-    configComparison.mockResolvedValue({
-      evaluator_type: 'both',
-      pipeline_config_ids: [1],
-      configs: null,
-      buckets: { heuristic: [], llm: [] },
-    })
+    configComparison.mockResolvedValue(emptyConfigComparisonBoth({ pipeline_config_ids: [1] }))
 
     render(<DashboardPanel pipelineConfigIds={[1]} />)
 
@@ -105,7 +226,7 @@ describe('DashboardPanel', () => {
     })
     const totalCard = screen.getByText('Total runs').closest('.cl-dash-stat')
     expect(totalCard).toHaveTextContent('1')
-    expect(screen.getByText(/latency averages/i)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Latency', level: 2 })).toBeInTheDocument()
     expect(screen.getByText(/recent runs/i)).toBeInTheDocument()
     expect(screen.getByRole('cell', { name: '7' })).toBeInTheDocument()
   })
@@ -300,12 +421,7 @@ describe('DashboardPanel', () => {
     const dl = vi.spyOn(exportDownload, 'triggerBrowserDownload').mockImplementation(() => {})
     dashboardSummary.mockResolvedValue(minimalDashboard())
     dashboardAnalytics.mockResolvedValue(minimalAnalytics())
-    configComparison.mockResolvedValue({
-      evaluator_type: 'both',
-      pipeline_config_ids: [],
-      configs: null,
-      buckets: { heuristic: [], llm: [] },
-    })
+    configComparison.mockResolvedValue(emptyConfigComparisonBoth())
 
     render(<DashboardPanel pipelineConfigIds={[]} />)
 
@@ -329,5 +445,45 @@ describe('DashboardPanel', () => {
     )
 
     dl.mockRestore()
+  })
+
+  it('renders LLM score spread (best/worst config + delta %) in comparison snapshot', async () => {
+    dashboardSummary.mockResolvedValue(minimalDashboard())
+    dashboardAnalytics.mockResolvedValue(minimalAnalytics())
+    configComparison.mockResolvedValue(
+      emptyConfigComparisonBoth({
+        pipeline_config_ids: [1, 2],
+        buckets: {
+          heuristic: [minimalCompareRow({ pipeline_config_id: 1, traced_runs: 1 })],
+          llm: [minimalCompareRow({ pipeline_config_id: 2, traced_runs: 2, avg_faithfulness: 0.9 })],
+        },
+        score_comparison_buckets: {
+          heuristic: nullScoreSummary(),
+          llm: {
+            best_config_faithfulness: 2,
+            worst_config_faithfulness: 1,
+            faithfulness_delta_pct: 25.5,
+            best_config_completeness: 3,
+            worst_config_completeness: 1,
+            completeness_delta_pct: 10,
+          },
+        },
+      }),
+    )
+
+    render(<DashboardPanel pipelineConfigIds={[1, 2]} />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Pipeline configs — llm/i })).toBeInTheDocument()
+    })
+    const llmHeading = screen.getByRole('heading', { name: /Pipeline configs — llm/i })
+    const llmSection = llmHeading.closest('.cl-dash-bucket')
+    expect(llmSection).toBeTruthy()
+    expect(within(llmSection!).getByText(/Faithfulness — best \/ worst config/i)).toBeInTheDocument()
+    const blob = llmSection!.textContent ?? ''
+    expect(blob).toMatch(/2\s*\/\s*1/)
+    expect(blob).toContain('25.5%')
+    expect(blob).toMatch(/Completeness — best \/ worst config[\s\S]*3\s*\/\s*1/)
+    expect(blob).toContain('10.0%')
   })
 })

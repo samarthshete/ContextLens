@@ -183,6 +183,12 @@ export function buildDashboardExportCsv(
   if (summary) {
     pushMetricRows(lines, 'summary_counts', [
       ['total_runs', summary.total_runs],
+      ['scale_benchmark_datasets', summary.scale?.benchmark_datasets],
+      ['scale_total_queries', summary.scale?.total_queries],
+      ['scale_total_traced_runs', summary.scale?.total_traced_runs],
+      ['scale_configs_tested', summary.scale?.configs_tested],
+      ['scale_documents_processed', summary.scale?.documents_processed],
+      ['scale_chunks_indexed', summary.scale?.chunks_indexed],
       ['status_completed', summary.status_counts?.completed],
       ['status_failed', summary.status_counts?.failed],
       ['status_in_progress', summary.status_counts?.in_progress],
@@ -190,13 +196,21 @@ export function buildDashboardExportCsv(
       ['evaluator_llm_runs', summary.evaluator_counts?.llm_runs],
       ['evaluator_runs_without_evaluation', summary.evaluator_counts?.runs_without_evaluation],
       ['latency_avg_retrieval_ms', summary.latency?.avg_retrieval_latency_ms],
+      ['latency_retrieval_p50_ms', summary.latency?.retrieval_latency_p50_ms],
+      ['latency_retrieval_p95_ms', summary.latency?.retrieval_latency_p95_ms],
       ['latency_avg_generation_ms', summary.latency?.avg_generation_latency_ms],
       ['latency_avg_evaluation_ms', summary.latency?.avg_evaluation_latency_ms],
       ['latency_avg_total_ms', summary.latency?.avg_total_latency_ms],
+      ['end_to_end_run_latency_avg_sec', summary.latency?.end_to_end_run_latency_avg_sec],
+      ['end_to_end_run_latency_p95_sec', summary.latency?.end_to_end_run_latency_p95_sec],
       ['cost_total_usd', summary.cost?.total_cost_usd],
       ['cost_avg_usd', summary.cost?.avg_cost_usd],
       ['cost_rows_with_value', summary.cost?.evaluation_rows_with_cost],
       ['cost_rows_not_available', summary.cost?.evaluation_rows_cost_not_available],
+      ['cost_avg_usd_per_llm_run', summary.cost?.avg_cost_usd_per_llm_run],
+      ['cost_llm_runs_with_measured_cost', summary.cost?.llm_runs_with_measured_cost],
+      ['cost_avg_usd_per_full_rag_run', summary.cost?.avg_cost_usd_per_full_rag_run],
+      ['cost_full_rag_runs_with_measured_cost', summary.cost?.full_rag_runs_with_measured_cost],
     ])
 
     const fc = summary.failure_type_counts && typeof summary.failure_type_counts === 'object'
@@ -245,6 +259,22 @@ export function buildDashboardExportCsv(
       }
       lines.push('')
     }
+
+    lines.push(joinCsvRow(['section', 'end_to_end_run_latency_sec']))
+    lines.push(joinCsvRow(['metric', 'value']))
+    lines.push(
+      joinCsvRow([
+        'end_to_end_run_latency_avg_sec',
+        analytics.end_to_end_run_latency_avg_sec ?? '',
+      ]),
+    )
+    lines.push(
+      joinCsvRow([
+        'end_to_end_run_latency_p95_sec',
+        analytics.end_to_end_run_latency_p95_sec ?? '',
+      ]),
+    )
+    lines.push('')
 
     const ts = Array.isArray(analytics.time_series) ? analytics.time_series : []
     lines.push(joinCsvRow(['section', 'time_series_daily']))

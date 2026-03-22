@@ -53,19 +53,35 @@ function minimalRun(over: Partial<RunDetail> = {}): RunDetail {
 function tinySummary(): DashboardSummaryResponse {
   return {
     total_runs: 2,
+    scale: {
+      benchmark_datasets: 1,
+      total_queries: 4,
+      total_traced_runs: 2,
+      configs_tested: 2,
+      documents_processed: 1,
+      chunks_indexed: 5,
+    },
     status_counts: { completed: 2, failed: 0, in_progress: 0 },
     evaluator_counts: { heuristic_runs: 2, llm_runs: 0, runs_without_evaluation: 0 },
     latency: {
       avg_retrieval_latency_ms: 10,
+      retrieval_latency_p50_ms: 9,
+      retrieval_latency_p95_ms: 15,
       avg_generation_latency_ms: null,
       avg_evaluation_latency_ms: null,
       avg_total_latency_ms: 20,
+      end_to_end_run_latency_avg_sec: 0.02,
+      end_to_end_run_latency_p95_sec: 0.03,
     },
     cost: {
       total_cost_usd: null,
       avg_cost_usd: null,
       evaluation_rows_with_cost: 0,
       evaluation_rows_cost_not_available: 2,
+      avg_cost_usd_per_llm_run: null,
+      llm_runs_with_measured_cost: 0,
+      avg_cost_usd_per_full_rag_run: null,
+      full_rag_runs_with_measured_cost: 0,
     },
     failure_type_counts: { UNKNOWN: 1 },
     recent_runs: [
@@ -101,6 +117,8 @@ function tinyAnalytics(): DashboardAnalyticsResponse {
       evaluation: { count: 1, min_ms: 2, max_ms: 8, avg_ms: 4, median_ms: 4, p95_ms: 8 },
       total: { count: 1, min_ms: 10, max_ms: 110, avg_ms: 100, median_ms: 100, p95_ms: 110 },
     },
+    end_to_end_run_latency_avg_sec: 0.1,
+    end_to_end_run_latency_p95_sec: 0.11,
     failure_analysis: {
       overall_counts: {},
       overall_percentages: {},
@@ -205,11 +223,19 @@ describe('exportDownload', () => {
     const csv = buildDashboardExportCsv(tinySummary(), null)
     expect(csv).toContain('section,recent_runs')
     expect(csv).toMatch(/\n5,completed,2026-03-01T00:00:00Z,/)
+    expect(csv).toContain('end_to_end_run_latency_avg_sec,0.02')
+    expect(csv).toContain('scale_benchmark_datasets,1')
+    expect(csv).toContain('scale_chunks_indexed,5')
+    expect(csv).toContain('cost_llm_runs_with_measured_cost,0')
+    expect(csv).toContain('cost_full_rag_runs_with_measured_cost,0')
     expect(csv).not.toContain('section,time_series_daily')
   })
 
   it('buildDashboardExportCsv analytics-only still renders analytics blocks', () => {
     const csv = buildDashboardExportCsv(null, tinyAnalytics())
+    expect(csv).toContain('section,end_to_end_run_latency_sec')
+    expect(csv).toContain('end_to_end_run_latency_avg_sec,0.1')
+    expect(csv).toContain('end_to_end_run_latency_p95_sec,0.11')
     expect(csv).toContain('section,time_series_daily')
     expect(csv).toContain('2026-03-20')
     expect(csv).toContain('section,config_insights')

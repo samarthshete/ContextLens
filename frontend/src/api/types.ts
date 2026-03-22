@@ -101,9 +101,19 @@ export interface ListRunsParams {
   status?: string
 }
 
+export interface ConfigScoreComparisonSummary {
+  best_config_faithfulness: number | null
+  worst_config_faithfulness: number | null
+  faithfulness_delta_pct: number | null
+  best_config_completeness: number | null
+  worst_config_completeness: number | null
+  completeness_delta_pct: number | null
+}
+
 export interface ConfigComparisonMetrics {
   pipeline_config_id: number
   traced_runs: number
+  avg_faithfulness: number | null
   avg_retrieval_latency_ms: number | null
   p95_retrieval_latency_ms: number | null
   avg_evaluation_latency_ms: number | null
@@ -123,6 +133,8 @@ export interface ConfigComparisonResponse {
   pipeline_config_ids: number[]
   configs: ConfigComparisonMetrics[] | null
   buckets: Record<string, ConfigComparisonMetrics[]> | null
+  score_comparison: ConfigScoreComparisonSummary | null
+  score_comparison_buckets: Record<string, ConfigScoreComparisonSummary> | null
 }
 
 /** ``GET /runs/dashboard-summary`` — observability aggregates. */
@@ -138,18 +150,43 @@ export interface DashboardEvaluatorCounts {
   runs_without_evaluation: number
 }
 
+/** Registry + corpus + traced-run scale (``GET /runs/dashboard-summary``). All counts are non-negative integers. */
+export interface DashboardScaleMetrics {
+  benchmark_datasets: number
+  total_queries: number
+  total_traced_runs: number
+  configs_tested: number
+  documents_processed: number
+  chunks_indexed: number
+}
+
 export interface DashboardLatencySummary {
   avg_retrieval_latency_ms: number | null
+  /** P50 from persisted `retrieval_latency_ms` (PostgreSQL `percentile_cont`); null if no samples. */
+  retrieval_latency_p50_ms: number | null
+  /** P95 from persisted `retrieval_latency_ms`; null if no samples. */
+  retrieval_latency_p95_ms: number | null
   avg_generation_latency_ms: number | null
   avg_evaluation_latency_ms: number | null
   avg_total_latency_ms: number | null
+  /** Mean of persisted `total_latency_ms` / 1000; null if no non-null totals. */
+  end_to_end_run_latency_avg_sec: number | null
+  /** P95 of `total_latency_ms` / 1000 (`percentile_cont`); null if no samples. */
+  end_to_end_run_latency_p95_sec: number | null
 }
 
 export interface DashboardCostSummary {
   total_cost_usd: number | null
+  /** Mean over evaluation **rows** with non-null `cost_usd` (not grouped by run). */
   avg_cost_usd: number | null
   evaluation_rows_with_cost: number
   evaluation_rows_cost_not_available: number
+  /** Mean of per-run totals for **LLM-bucket** eval rows with measured cost; null if no such runs. */
+  avg_cost_usd_per_llm_run: number | null
+  llm_runs_with_measured_cost: number
+  /** LLM measured cost, runs that also have `generation_results` (full RAG path). */
+  avg_cost_usd_per_full_rag_run: number | null
+  full_rag_runs_with_measured_cost: number
 }
 
 export interface DashboardRecentRun {
@@ -164,6 +201,7 @@ export interface DashboardRecentRun {
 
 export interface DashboardSummaryResponse {
   total_runs: number
+  scale: DashboardScaleMetrics
   status_counts: DashboardStatusCounts
   evaluator_counts: DashboardEvaluatorCounts
   latency: DashboardLatencySummary
@@ -333,6 +371,9 @@ export interface ConfigInsight {
 export interface DashboardAnalyticsResponse {
   time_series: TimeSeriesDay[]
   latency_distribution: LatencyDistributionSection
+  /** Same population as `latency_distribution.total` avg/p95; seconds = ms / 1000. */
+  end_to_end_run_latency_avg_sec: number | null
+  end_to_end_run_latency_p95_sec: number | null
   failure_analysis: FailureAnalysisSection
   config_insights: ConfigInsight[]
 }

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Callable, Literal
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.evaluator_bucket import sql_is_heuristic_bucket, sql_is_llm_bucket
-from app.schemas.config_comparison import ConfigComparisonMetrics, ConfigComparisonResponse
+from app.schemas.config_comparison import (
+    ConfigComparisonMetrics,
+    ConfigComparisonResponse,
+    ConfigScoreComparisonSummary,
+)
 
 _MAX_CONFIG_IDS = 64
 
@@ -26,6 +30,7 @@ SELECT
   percentile_cont(0.95) WITHIN GROUP (ORDER BY r.total_latency_ms)::double precision
     AS p95_total_latency_ms,
   AVG(er.groundedness)::double precision AS avg_groundedness,
+  AVG(er.faithfulness)::double precision AS avg_faithfulness,
   AVG(er.completeness)::double precision AS avg_completeness,
   AVG(er.retrieval_relevance)::double precision AS avg_retrieval_relevance,
   AVG(er.context_coverage)::double precision AS avg_context_coverage,
@@ -64,6 +69,72 @@ def _float_or_none(v: object) -> float | None:
     if v is None:
         return None
     return float(v)
+
+
+_SCORE_EPS = 1e-9
+
+
+def _rank_avg_dimension(
+    metrics: list[ConfigComparisonMetrics],
+    get_val: Callable[[ConfigComparisonMetrics], float | None],
+) -> tuple[int | None, int | None, float | None, float | None]:
+    """Best / worst config ids and their bucket averages for one score column."""
+    eligible: list[tuple[ConfigComparisonMetrics, float]] = []
+    for m in metrics:
+        if m.traced_runs <= 0:
+            continue
+        v = get_val(m)
+        if v is None:
+            continue
+        eligible.append((m, float(v)))
+    if not eligible:
+        return None, None, None, None
+    best_m, bv = max(eligible, key=lambda t: (t[1], -t[0].pipeline_config_id))
+    worst_m, wv = min(eligible, key=lambda t: (t[1], t[0].pipeline_config_id))
+    return best_m.pipeline_config_id, worst_m.pipeline_config_id, bv, wv
+
+
+def _delta_pct(best_v: float, worst_v: float) -> float | None:
+    if abs(best_v - worst_v) < _SCORE_EPS:
+        return 0.0
+    if worst_v > _SCORE_EPS:
+        return 100.0 * (best_v - worst_v) / worst_v
+    return None
+
+
+def build_config_score_comparison(
+    metrics: list[ConfigComparisonMetrics],
+    *,
+    include_faithfulness: bool,
+) -> ConfigScoreComparisonSummary:
+    """Summarize best/worst configs by average faithfulness and completeness in this bucket.
+
+    When ``include_faithfulness`` is false (combined heuristic+LLM rows), faithfulness fields are
+    all ``None`` — do not blend judge faithfulness with heuristic nulls.
+    """
+    bf: int | None = None
+    wf: int | None = None
+    faith_delta: float | None = None
+    if include_faithfulness:
+        bfv: float | None
+        wfv: float | None
+        bf, wf, bfv, wfv = _rank_avg_dimension(metrics, lambda m: m.avg_faithfulness)
+        if bfv is not None and wfv is not None:
+            faith_delta = _delta_pct(bfv, wfv)
+
+    bc, wc, bcv, wcv = _rank_avg_dimension(metrics, lambda m: m.avg_completeness)
+    comp_delta: float | None = None
+    if bcv is not None and wcv is not None:
+        comp_delta = _delta_pct(bcv, wcv)
+
+    return ConfigScoreComparisonSummary(
+        best_config_faithfulness=bf,
+        worst_config_faithfulness=wf,
+        faithfulness_delta_pct=faith_delta,
+        best_config_completeness=bc,
+        worst_config_completeness=wc,
+        completeness_delta_pct=comp_delta,
+    )
 
 
 async def _query_main(
@@ -107,6 +178,7 @@ def _build_metrics_list(
                 ConfigComparisonMetrics(
                     pipeline_config_id=pid,
                     traced_runs=0,
+                    avg_faithfulness=None,
                     failure_type_counts=dict(fmap),
                 )
             )
@@ -153,31 +225,40 @@ async def compare_pipeline_configs(
     if combine_evaluators:
         main = await _query_main(session, pids, None)
         fails = await _query_failures(session, pids, None)
+        rows = _build_metrics_list(pids, main, fails)
         return ConfigComparisonResponse(
             evaluator_type="combined",
             pipeline_config_ids=pids,
-            configs=_build_metrics_list(pids, main, fails),
+            configs=rows,
             buckets=None,
+            score_comparison=build_config_score_comparison(rows, include_faithfulness=False),
+            score_comparison_buckets=None,
         )
 
     if evaluator_type == "heuristic":
         main = await _query_main(session, pids, "heuristic")
         fails = await _query_failures(session, pids, "heuristic")
+        rows = _build_metrics_list(pids, main, fails)
         return ConfigComparisonResponse(
             evaluator_type="heuristic",
             pipeline_config_ids=pids,
-            configs=_build_metrics_list(pids, main, fails),
+            configs=rows,
             buckets=None,
+            score_comparison=build_config_score_comparison(rows, include_faithfulness=True),
+            score_comparison_buckets=None,
         )
 
     if evaluator_type == "llm":
         main = await _query_main(session, pids, "llm")
         fails = await _query_failures(session, pids, "llm")
+        rows = _build_metrics_list(pids, main, fails)
         return ConfigComparisonResponse(
             evaluator_type="llm",
             pipeline_config_ids=pids,
-            configs=_build_metrics_list(pids, main, fails),
+            configs=rows,
             buckets=None,
+            score_comparison=build_config_score_comparison(rows, include_faithfulness=True),
+            score_comparison_buckets=None,
         )
 
     # both buckets, separate rows
@@ -185,12 +266,19 @@ async def compare_pipeline_configs(
     fail_h = await _query_failures(session, pids, "heuristic")
     main_l = await _query_main(session, pids, "llm")
     fail_l = await _query_failures(session, pids, "llm")
+    list_h = _build_metrics_list(pids, main_h, fail_h)
+    list_l = _build_metrics_list(pids, main_l, fail_l)
     return ConfigComparisonResponse(
         evaluator_type="both",
         pipeline_config_ids=pids,
         configs=None,
         buckets={
-            "heuristic": _build_metrics_list(pids, main_h, fail_h),
-            "llm": _build_metrics_list(pids, main_l, fail_l),
+            "heuristic": list_h,
+            "llm": list_l,
+        },
+        score_comparison=None,
+        score_comparison_buckets={
+            "heuristic": build_config_score_comparison(list_h, include_faithfulness=True),
+            "llm": build_config_score_comparison(list_l, include_faithfulness=True),
         },
     )

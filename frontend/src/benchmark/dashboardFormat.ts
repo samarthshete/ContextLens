@@ -5,6 +5,12 @@ export function formatLatencyMs(v: number | null | undefined): string {
   return `${Math.round(Number(v))} ms`
 }
 
+/** Server aggregate in seconds (e.g. ``total_latency_ms`` mean / 1000); null → N/A. */
+export function formatLatencySec(v: number | null | undefined): string {
+  if (v == null || Number.isNaN(Number(v))) return 'N/A'
+  return `${Number(v).toFixed(3)} s`
+}
+
 /** USD from API; ``null``/undefined → not available; real zero shown explicitly. */
 export function formatUsd(v: number | null | undefined): string {
   if (v == null) return 'N/A'

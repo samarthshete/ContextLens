@@ -7,7 +7,7 @@ import type {
   DashboardSummaryResponse,
 } from '../api/types'
 import { describeApiError } from './errorMessage'
-import { costAvailabilityLine, formatLatencyMs, formatUsd } from './dashboardFormat'
+import { costAvailabilityLine, formatLatencyMs, formatLatencySec, formatUsd } from './dashboardFormat'
 import { DashboardTrendPanel } from './DashboardTrendPanel'
 import { LatencyDistributionPanel } from './LatencyDistributionPanel'
 import { FailureBreakdownPanel } from './FailureBreakdownPanel'
@@ -20,6 +20,7 @@ import {
   serializeDashboardExportJson,
   triggerBrowserDownload,
 } from './exportDownload'
+import { ScoreComparisonDl } from './scoreComparisonDisplay'
 
 function formatWhen(iso: string): string {
   try {
@@ -43,11 +44,13 @@ function CompareBucketsTable({ result }: { result: ConfigComparisonResponse }) {
   if (result.evaluator_type !== 'both' || buckets == null) {
     return null
   }
+  const scb = result.score_comparison_buckets
   return (
     <div className="cl-dash-compare-buckets">
       {(['heuristic', 'llm'] as const).map((bucket) => (
         <div key={bucket} className="cl-card cl-dash-bucket">
           <h3>Pipeline configs — {bucket}</h3>
+          {scb?.[bucket] ? <ScoreComparisonDl summary={scb[bucket]!} /> : null}
           <CompareMetricsRows rows={buckets[bucket] ?? []} />
         </div>
       ))}
@@ -239,6 +242,39 @@ export function DashboardPanel({ pipelineConfigIds, onOpenRunDetail }: Dashboard
 
       {data && !error ? (
         <>
+          <section className="cl-dash-grid" aria-label="System scale" data-testid="dashboard-system-scale">
+            <div className="cl-dash-stat">
+              <span className="cl-dash-stat-label">Benchmark datasets</span>
+              <span className="cl-dash-stat-value">{data.scale.benchmark_datasets}</span>
+            </div>
+            <div className="cl-dash-stat">
+              <span className="cl-dash-stat-label">Query cases</span>
+              <span className="cl-dash-stat-value">{data.scale.total_queries}</span>
+            </div>
+            <div className="cl-dash-stat">
+              <span className="cl-dash-stat-label">Traced runs</span>
+              <span className="cl-dash-stat-value">{data.scale.total_traced_runs}</span>
+            </div>
+            <div className="cl-dash-stat">
+              <span className="cl-dash-stat-label">Configs in runs</span>
+              <span className="cl-dash-stat-value">{data.scale.configs_tested}</span>
+            </div>
+            <div className="cl-dash-stat">
+              <span className="cl-dash-stat-label">Documents processed</span>
+              <span className="cl-dash-stat-value">{data.scale.documents_processed}</span>
+            </div>
+            <div className="cl-dash-stat">
+              <span className="cl-dash-stat-label">Chunks stored</span>
+              <span className="cl-dash-stat-value">{data.scale.chunks_indexed}</span>
+            </div>
+          </section>
+          <p className="cl-muted cl-dash-scale-note">
+            <strong>Traced runs</strong> = runs with at least one persisted retrieval hit and one evaluation row
+            (same definition as metrics aggregate). <strong>Configs in runs</strong> = distinct{' '}
+            <code>pipeline_config_id</code> on run rows. <strong>Chunks stored</strong> = rows in{' '}
+            <code>chunks</code> (ingested segments; aligns with aggregate <code>chunk_count</code>).
+          </p>
+
           <section className="cl-dash-grid" aria-label="Run counts">
             <div className="cl-dash-stat">
               <span className="cl-dash-stat-label">Total runs</span>
@@ -275,13 +311,34 @@ export function DashboardPanel({ pipelineConfigIds, onOpenRunDetail }: Dashboard
             timeSeries={analytics?.time_series ?? []}
           />
 
-          <section className="cl-card" aria-label="Latency averages">
-            <h2>Latency averages</h2>
-            <p className="cl-muted">Over runs where each column is non-null.</p>
+          <section className="cl-card" aria-label="Latency">
+            <h2>Latency</h2>
+            <p className="cl-muted">
+              Means and retrieval percentiles are computed server-side from persisted{' '}
+              <code>runs.*_latency_ms</code> only (PostgreSQL <code>percentile_cont</code> for P50/P95).
+              End-to-end average and P95 in seconds use the same non-null{' '}
+              <code>runs.total_latency_ms</code> population as the total mean (milliseconds); seconds = ms ÷
+              1000.
+            </p>
             <dl className="cl-dash-dl">
-              <div className="cl-dash-dl-row">
+              <div className="cl-dash-dl-row" data-testid="dashboard-retrieval-latency">
                 <dt>Retrieval</dt>
-                <dd>{formatLatencyMs(data.latency.avg_retrieval_latency_ms)}</dd>
+                <dd>
+                  <ul className="cl-dash-latency-breakdown">
+                    <li>
+                      <span className="cl-dash-latency-label">Mean</span>{' '}
+                      {formatLatencyMs(data.latency.avg_retrieval_latency_ms)}
+                    </li>
+                    <li>
+                      <span className="cl-dash-latency-label">P50</span>{' '}
+                      {formatLatencyMs(data.latency.retrieval_latency_p50_ms)}
+                    </li>
+                    <li>
+                      <span className="cl-dash-latency-label">P95</span>{' '}
+                      {formatLatencyMs(data.latency.retrieval_latency_p95_ms)}
+                    </li>
+                  </ul>
+                </dd>
               </div>
               <div className="cl-dash-dl-row">
                 <dt>Generation</dt>
@@ -291,9 +348,24 @@ export function DashboardPanel({ pipelineConfigIds, onOpenRunDetail }: Dashboard
                 <dt>Evaluation</dt>
                 <dd>{formatLatencyMs(data.latency.avg_evaluation_latency_ms)}</dd>
               </div>
-              <div className="cl-dash-dl-row">
-                <dt>Total</dt>
-                <dd>{formatLatencyMs(data.latency.avg_total_latency_ms)}</dd>
+              <div className="cl-dash-dl-row" data-testid="dashboard-end-to-end-latency">
+                <dt>End-to-end (total)</dt>
+                <dd>
+                  <ul className="cl-dash-latency-breakdown">
+                    <li>
+                      <span className="cl-dash-latency-label">Mean (ms)</span>{' '}
+                      {formatLatencyMs(data.latency.avg_total_latency_ms)}
+                    </li>
+                    <li>
+                      <span className="cl-dash-latency-label">Avg (s)</span>{' '}
+                      {formatLatencySec(data.latency.end_to_end_run_latency_avg_sec)}
+                    </li>
+                    <li>
+                      <span className="cl-dash-latency-label">P95 (s)</span>{' '}
+                      {formatLatencySec(data.latency.end_to_end_run_latency_p95_sec)}
+                    </li>
+                  </ul>
+                </dd>
               </div>
             </dl>
           </section>
@@ -307,8 +379,30 @@ export function DashboardPanel({ pipelineConfigIds, onOpenRunDetail }: Dashboard
                 <dd>{formatUsd(data.cost.total_cost_usd)}</dd>
               </div>
               <div className="cl-dash-dl-row">
-                <dt>Average (non-null only)</dt>
+                <dt>Average per evaluation row (non-null only)</dt>
                 <dd>{formatUsd(data.cost.avg_cost_usd)}</dd>
+              </div>
+              <div className="cl-dash-dl-row">
+                <dt>Average per LLM run (measured cost only)</dt>
+                <dd>
+                  {formatUsd(data.cost.avg_cost_usd_per_llm_run)}{' '}
+                  <span className="cl-muted">
+                    ({data.cost.llm_runs_with_measured_cost} run
+                    {data.cost.llm_runs_with_measured_cost === 1 ? '' : 's'} with non-null cost; heuristic
+                    excluded)
+                  </span>
+                </dd>
+              </div>
+              <div className="cl-dash-dl-row">
+                <dt>Average per full RAG run (gen + judge, measured)</dt>
+                <dd>
+                  {formatUsd(data.cost.avg_cost_usd_per_full_rag_run)}{' '}
+                  <span className="cl-muted">
+                    ({data.cost.full_rag_runs_with_measured_cost} run
+                    {data.cost.full_rag_runs_with_measured_cost === 1 ? '' : 's'} with{' '}
+                    <code>generation_results</code> + LLM cost)
+                  </span>
+                </dd>
               </div>
             </dl>
           </section>

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { installApiMetaRoute } from './fixtures'
 
 const RUN_ROW = {
   status: 'running',
@@ -16,6 +17,7 @@ const RUN_ROW = {
 }
 
 async function mockQueueBrowserApi(page: Page) {
+  await installApiMetaRoute(page)
   await page.route('**/api/v1/datasets', (route) =>
     route.fulfill({ json: [], contentType: 'application/json' }),
   )

@@ -1,7 +1,32 @@
+import type { Page } from '@playwright/test'
+
 /**
  * Deterministic mock API responses for E2E tests.
  * Shaped to match real GET /api/v1/runs/{id} payloads.
  */
+
+/** `WriteKeyBanner` calls GET /api/v1/meta on load — mock before navigation. */
+export async function installApiMetaRoute(
+  page: Page,
+  options?: { writeProtection?: boolean },
+): Promise<void> {
+  const writeProtection = options?.writeProtection ?? false
+  await page.route('**/api/v1/meta', (route) => {
+    if (route.request().method() === 'GET') {
+      return route.fulfill({
+        json: { write_protection: writeProtection, app_env: 'test' },
+        contentType: 'application/json',
+      })
+    }
+    return route.continue()
+  })
+  await page.route('**/api/v1/meta/verify-write-key', (route) => {
+    if (route.request().method() === 'POST') {
+      return route.fulfill({ status: 200, json: { ok: true }, contentType: 'application/json' })
+    }
+    return route.continue()
+  })
+}
 
 /** A completed heuristic run with retrieval hits but no generation. */
 export const HEURISTIC_RUN = {

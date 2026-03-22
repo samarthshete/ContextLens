@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { costAvailabilityLine, formatLatencyMs, formatUsd } from './dashboardFormat'
+import { costAvailabilityLine, formatLatencyMs, formatLatencySec, formatUsd } from './dashboardFormat'
 
 describe('formatLatencyMs', () => {
   it('formats number', () => {
@@ -7,6 +7,15 @@ describe('formatLatencyMs', () => {
   })
   it('returns N/A for null', () => {
     expect(formatLatencyMs(null)).toBe('N/A')
+  })
+})
+
+describe('formatLatencySec', () => {
+  it('formats seconds with three decimals', () => {
+    expect(formatLatencySec(1.5)).toBe('1.500 s')
+  })
+  it('returns N/A for null', () => {
+    expect(formatLatencySec(null)).toBe('N/A')
   })
 })
 

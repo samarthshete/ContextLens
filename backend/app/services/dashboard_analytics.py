@@ -8,12 +8,12 @@ from sqlalchemy import case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import EvaluationResult, PipelineConfig, Run
+from app.services.phase_latency_distribution import get_phase_latency_distribution
 from app.schemas.dashboard_analytics import (
     ConfigInsight,
     DashboardAnalyticsResponse,
     FailureAnalysisSection,
     FailureByConfig,
-    LatencyDistribution,
     LatencyDistributionSection,
     RecentFailedRun,
     TimeSeriesDay,
@@ -77,35 +77,13 @@ async def _time_series(session: AsyncSession) -> list[TimeSeriesDay]:
 
 
 async def _latency_distribution(session: AsyncSession) -> LatencyDistributionSection:
-    """Min/max/avg/median/p95 for each latency phase."""
-
-    async def _dist(col) -> LatencyDistribution:
-        stmt = select(
-            func.count().filter(col.isnot(None)).label("cnt"),
-            func.min(col).label("min_v"),
-            func.max(col).label("max_v"),
-            func.avg(col).label("avg_v"),
-            func.percentile_cont(0.5).within_group(col).label("median_v"),
-            func.percentile_cont(0.95).within_group(col).label("p95_v"),
-        ).select_from(Run)
-        row = (await session.execute(stmt)).one()
-        cnt = int(row.cnt)
-        if cnt == 0:
-            return LatencyDistribution()
-        return LatencyDistribution(
-            count=cnt,
-            min_ms=_f(row.min_v),
-            max_ms=_f(row.max_v),
-            avg_ms=_f(row.avg_v),
-            median_ms=_f(row.median_v),
-            p95_ms=_f(row.p95_v),
-        )
+    """Min/max/avg/median/p95 for each latency phase (shared SQL via ``phase_latency_distribution``)."""
 
     return LatencyDistributionSection(
-        retrieval=await _dist(Run.retrieval_latency_ms),
-        generation=await _dist(Run.generation_latency_ms),
-        evaluation=await _dist(Run.evaluation_latency_ms),
-        total=await _dist(Run.total_latency_ms),
+        retrieval=await get_phase_latency_distribution(session, Run.retrieval_latency_ms),
+        generation=await get_phase_latency_distribution(session, Run.generation_latency_ms),
+        evaluation=await get_phase_latency_distribution(session, Run.evaluation_latency_ms),
+        total=await get_phase_latency_distribution(session, Run.total_latency_ms),
     )
 
 
@@ -281,9 +259,20 @@ async def _config_insights(session: AsyncSession) -> list[ConfigInsight]:
 
 async def get_dashboard_analytics(session: AsyncSession) -> DashboardAnalyticsResponse:
     """Compute all analytics sections."""
+    latency_distribution = await _latency_distribution(session)
+    total = latency_distribution.total
+    avg_sec: float | None = None
+    p95_sec: float | None = None
+    if total.count > 0:
+        if total.avg_ms is not None:
+            avg_sec = float(total.avg_ms) / 1000.0
+        if total.p95_ms is not None:
+            p95_sec = float(total.p95_ms) / 1000.0
     return DashboardAnalyticsResponse(
         time_series=await _time_series(session),
-        latency_distribution=await _latency_distribution(session),
+        latency_distribution=latency_distribution,
+        end_to_end_run_latency_avg_sec=avg_sec,
+        end_to_end_run_latency_p95_sec=p95_sec,
         failure_analysis=await _failure_analysis(session),
         config_insights=await _config_insights(session),
     )

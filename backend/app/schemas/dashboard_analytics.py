@@ -88,11 +88,17 @@ class ConfigInsight(BaseModel):
 
 
 class DashboardAnalyticsResponse(BaseModel):
-    """Full analytics payload for the dashboard."""
+    """Full analytics payload for the dashboard.
+
+    ``end_to_end_run_latency_*_sec`` mirror ``latency_distribution.total`` avg/p95 over non-null
+    ``runs.total_latency_ms``, divided by 1000 (seconds).
+    """
 
     time_series: list[TimeSeriesDay] = Field(default_factory=list)
     latency_distribution: LatencyDistributionSection = Field(
         default_factory=LatencyDistributionSection
     )
+    end_to_end_run_latency_avg_sec: float | None = None
+    end_to_end_run_latency_p95_sec: float | None = None
     failure_analysis: FailureAnalysisSection = Field(default_factory=FailureAnalysisSection)
     config_insights: list[ConfigInsight] = Field(default_factory=list)

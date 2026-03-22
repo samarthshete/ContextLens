@@ -71,6 +71,8 @@ async def test_analytics_response_shape(analytics_client: AsyncClient):
     # Top-level sections exist
     assert "time_series" in body
     assert "latency_distribution" in body
+    assert "end_to_end_run_latency_avg_sec" in body
+    assert "end_to_end_run_latency_p95_sec" in body
     assert "failure_analysis" in body
     assert "config_insights" in body
 
@@ -123,6 +125,9 @@ async def test_analytics_with_seeded_data(analytics_client: AsyncClient):
     assert total["avg_ms"] is not None
     assert total["median_ms"] is not None
     assert total["p95_ms"] is not None
+    # End-to-end sec metrics match ``latency_distribution.total`` / 1000 (same SQL population)
+    assert body["end_to_end_run_latency_avg_sec"] == pytest.approx(total["avg_ms"] / 1000.0)
+    assert body["end_to_end_run_latency_p95_sec"] == pytest.approx(total["p95_ms"] / 1000.0)
 
     # failure_analysis should include RETRIEVAL_MISS
     fa = body["failure_analysis"]

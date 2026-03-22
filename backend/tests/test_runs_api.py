@@ -272,6 +272,14 @@ async def test_list_runs_and_config_comparison(run_client: AsyncClient):
     assert l_by[pid_h]["traced_runs"] == 0
     assert l_by[pid_l]["traced_runs"] == 1
     assert l_by[pid_l]["avg_groundedness"] == pytest.approx(0.85)
+    assert l_by[pid_l]["avg_faithfulness"] == pytest.approx(0.9)
+    scb = cmp_body["score_comparison_buckets"]
+    assert scb is not None
+    assert scb["llm"]["best_config_faithfulness"] == pid_l
+    assert scb["llm"]["worst_config_faithfulness"] == pid_l
+    assert scb["llm"]["faithfulness_delta_pct"] == pytest.approx(0.0)
+    assert scb["heuristic"]["best_config_faithfulness"] is None
+    assert scb["heuristic"]["faithfulness_delta_pct"] is None
 
     comb = await run_client.get(
         f"{BASE}/runs/config-comparison",
@@ -285,3 +293,11 @@ async def test_list_runs_and_config_comparison(run_client: AsyncClient):
     assert cj["evaluator_type"] == "combined"
     assert len(cj["configs"]) == 1
     assert cj["configs"][0]["traced_runs"] == 1
+    assert cj["configs"][0]["avg_faithfulness"] == pytest.approx(0.9)
+    sc = cj["score_comparison"]
+    assert sc is not None
+    assert sc["best_config_faithfulness"] is None
+    assert sc["faithfulness_delta_pct"] is None
+    assert sc["best_config_completeness"] == pid_l
+    assert sc["worst_config_completeness"] == pid_l
+    assert sc["completeness_delta_pct"] == pytest.approx(0.0)

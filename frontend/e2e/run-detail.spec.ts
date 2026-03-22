@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { HEURISTIC_RUN, FULL_RUN, PARTIAL_RUN } from './fixtures'
+import { HEURISTIC_RUN, FULL_RUN, PARTIAL_RUN, installApiMetaRoute } from './fixtures'
 
 /**
  * Mock all API routes so tests run without a backend.
@@ -7,6 +7,7 @@ import { HEURISTIC_RUN, FULL_RUN, PARTIAL_RUN } from './fixtures'
  * The workspace also loads registry on init.
  */
 async function mockApi(page: Page) {
+  await installApiMetaRoute(page)
   // Registry endpoints — return empty lists (safe)
   await page.route('**/api/v1/datasets', (route) =>
     route.fulfill({ json: [], contentType: 'application/json' }),

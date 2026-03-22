@@ -39,6 +39,7 @@ import {
   serializeRunTraceJson,
   triggerBrowserDownload,
 } from './exportDownload'
+import { ScoreComparisonDl } from './scoreComparisonDisplay'
 import './benchmark.css'
 
 export type View = 'run' | 'runs' | 'queue' | 'detail' | 'compare' | 'dashboard' | 'document'
@@ -190,6 +191,8 @@ function MetricsTable({ rows, title }: { rows: ConfigComparisonMetrics[]; title:
               <th>Avg eval ms</th>
               <th>Avg total ms</th>
               <th>Avg rel.</th>
+              <th>Avg faith.</th>
+              <th>Avg comp.</th>
               <th>Failure counts</th>
             </tr>
           </thead>
@@ -210,6 +213,8 @@ function MetricsTable({ rows, title }: { rows: ConfigComparisonMetrics[]; title:
                   <td>{m.avg_evaluation_latency_ms?.toFixed?.(1) ?? '—'}</td>
                   <td>{m.avg_total_latency_ms?.toFixed?.(1) ?? '—'}</td>
                   <td>{m.avg_retrieval_relevance?.toFixed?.(3) ?? '—'}</td>
+                  <td>{m.avg_faithfulness != null ? m.avg_faithfulness.toFixed(3) : '—'}</td>
+                  <td>{m.avg_completeness != null ? m.avg_completeness.toFixed(3) : '—'}</td>
                   <td className="cl-td-wrap">{failStr}</td>
                 </tr>
               )
@@ -1206,11 +1211,35 @@ export function BenchmarkWorkspace({ routeView }: { routeView: View }) {
 
           {compareResult?.buckets ? (
             <div className="cl-compare-grid">
-              <MetricsTable rows={compareResult.buckets.heuristic ?? []} title="Heuristic bucket" />
-              <MetricsTable rows={compareResult.buckets.llm ?? []} title="LLM bucket" />
+              <div className="cl-compare-column">
+                <MetricsTable rows={compareResult.buckets.heuristic ?? []} title="Heuristic bucket" />
+                {compareResult.score_comparison_buckets?.heuristic ? (
+                  <div className="cl-card">
+                    <h3 className="cl-h3-muted">Heuristic — best vs worst (avg scores)</h3>
+                    <ScoreComparisonDl summary={compareResult.score_comparison_buckets.heuristic} />
+                  </div>
+                ) : null}
+              </div>
+              <div className="cl-compare-column">
+                <MetricsTable rows={compareResult.buckets.llm ?? []} title="LLM bucket" />
+                {compareResult.score_comparison_buckets?.llm ? (
+                  <div className="cl-card">
+                    <h3 className="cl-h3-muted">LLM — best vs worst (avg scores)</h3>
+                    <ScoreComparisonDl summary={compareResult.score_comparison_buckets.llm} />
+                  </div>
+                ) : null}
+              </div>
             </div>
           ) : compareResult?.configs ? (
-            <MetricsTable rows={compareResult.configs} title="Combined (heuristic + LLM merged)" />
+            <div className="cl-compare-column">
+              <MetricsTable rows={compareResult.configs} title="Combined (heuristic + LLM merged)" />
+              {compareResult.score_comparison ? (
+                <div className="cl-card">
+                  <h3 className="cl-h3-muted">Combined — best vs worst (avg scores)</h3>
+                  <ScoreComparisonDl summary={compareResult.score_comparison} />
+                </div>
+              ) : null}
+            </div>
           ) : (
             <p className="cl-muted cl-card cl-empty">Run Compare to load aggregates.</p>
           )}
