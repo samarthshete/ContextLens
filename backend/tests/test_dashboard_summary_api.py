@@ -37,16 +37,21 @@ async def _seed_run_with_eval(
     status: str,
     failure_type: str,
     cost: float | None,
+    dataset_id: int | None = None,
     run_metadata: dict | None = None,
     retrieval_latency_ms: int = 10,
     generation_latency_ms: int = 20,
     evaluation_latency_ms: int = 30,
     total_latency_ms: int = 60,
 ):
-    ds = Dataset(name="dash_ds", description="")
-    session.add(ds)
-    await session.flush()
-    qc = QueryCase(dataset_id=ds.id, query_text="q?", expected_answer=None)
+    if dataset_id is None:
+        ds = Dataset(name="dash_ds", description="")
+        session.add(ds)
+        await session.flush()
+        dset_id = ds.id
+    else:
+        dset_id = dataset_id
+    qc = QueryCase(dataset_id=dset_id, query_text="q?", expected_answer=None)
     pc = PipelineConfig(
         name="dash_pc",
         embedding_model="all-MiniLM-L6-v2",
@@ -287,6 +292,9 @@ async def test_dashboard_summary_response_shape(dash_client: AsyncClient):
     assert resp.status_code == 200
     body = resp.json()
     assert isinstance(body["total_runs"], int)
+    assert "repeated_sampling_note" in body
+    assert isinstance(body["repeated_sampling_note"], str)
+    assert "repeated sampling" in body["repeated_sampling_note"].lower()
     assert "scale" in body
     sc = body["scale"]
     for k in (
@@ -303,6 +311,8 @@ async def test_dashboard_summary_response_shape(dash_client: AsyncClient):
     assert "heuristic_runs" in body["evaluator_counts"]
     assert "avg_total_latency_ms" in body["latency"]
     assert "end_to_end_run_latency_avg_sec" in body["latency"]
+    assert "total_latency_p50_ms" in body["latency"]
+    assert "end_to_end_run_latency_p50_sec" in body["latency"]
     assert "end_to_end_run_latency_p95_sec" in body["latency"]
     assert "retrieval_latency_p50_ms" in body["latency"]
     assert "retrieval_latency_p95_ms" in body["latency"]
@@ -318,6 +328,8 @@ async def test_dashboard_summary_response_shape(dash_client: AsyncClient):
     assert isinstance(co["llm_runs_with_measured_cost"], int)
     assert isinstance(co["full_rag_runs_with_measured_cost"], int)
     assert isinstance(body["failure_type_counts"], dict)
+    assert "model_failures" in body
+    assert isinstance(body["model_failures"], int)
     assert isinstance(body["recent_runs"], list)
 
 
@@ -348,6 +360,8 @@ async def test_dashboard_summary_counts_latency_cost_failures(dash_client: Async
     assert ft.get("UNKNOWN", 0) == ft0.get("UNKNOWN", 0) + 2
     assert ft.get("RETRIEVAL_MISS", 0) == ft0.get("RETRIEVAL_MISS", 0) + 1
 
+    assert b["model_failures"] == b0["model_failures"] + 3
+
     recent = b["recent_runs"]
     assert len(recent) >= 3
     assert recent[0]["run_id"] == rid_running
@@ -358,14 +372,29 @@ async def test_dashboard_summary_counts_latency_cost_failures(dash_client: Async
     assert b["latency"]["avg_retrieval_latency_ms"] == pytest.approx(10.0)
     assert b["latency"]["retrieval_latency_p50_ms"] == pytest.approx(10.0)
     assert b["latency"]["retrieval_latency_p95_ms"] == pytest.approx(10.0)
-    # End-to-end sec fields track ``avg_total_latency_ms`` / 1000 and total p95 / 1000 (same SQL path)
+    # End-to-end sec fields track total ``avg`` / ``median`` / ``p95`` / 1000 (same SQL path as analytics total phase)
     lat = b["latency"]
     if lat["avg_total_latency_ms"] is None:
         assert lat["end_to_end_run_latency_avg_sec"] is None
+        assert lat["total_latency_p50_ms"] is None
+        assert lat["end_to_end_run_latency_p50_sec"] is None
         assert lat["end_to_end_run_latency_p95_sec"] is None
     else:
         assert lat["end_to_end_run_latency_avg_sec"] == pytest.approx(lat["avg_total_latency_ms"] / 1000.0)
+        assert lat["total_latency_p50_ms"] == pytest.approx(lat["avg_total_latency_ms"])
+        assert lat["end_to_end_run_latency_p50_sec"] == pytest.approx(lat["avg_total_latency_ms"] / 1000.0)
         assert lat["end_to_end_run_latency_p95_sec"] is not None
+
+
+@pytest.mark.asyncio
+async def test_dashboard_summary_model_failures_excludes_no_failure(dash_client: AsyncClient):
+    """``model_failures`` counts evaluation rows with a failure label other than ``NO_FAILURE``."""
+    b0 = (await dash_client.get(f"{BASE}/runs/dashboard-summary")).json()
+    async with async_session_maker() as session:
+        await _seed_run_with_eval(session, status=STATUS_COMPLETED, failure_type="NO_FAILURE", cost=None)
+    b1 = (await dash_client.get(f"{BASE}/runs/dashboard-summary")).json()
+    assert b1["total_runs"] == b0["total_runs"] + 1
+    assert b1["model_failures"] == b0["model_failures"]
 
 
 @pytest.mark.asyncio
@@ -479,3 +508,98 @@ async def test_dashboard_summary_latency_matches_analytics_excluding_realism(das
     assert (r_sum_1 is None) == (r_an_1 is None)
     if r_sum_1 is not None:
         assert r_sum_1 == pytest.approx(r_an_1)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_summary_unknown_dataset_returns_404(dash_client: AsyncClient):
+    resp = await dash_client.get(f"{BASE}/runs/dashboard-summary?dataset_id=999999991")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_dashboard_analytics_unknown_dataset_returns_404(dash_client: AsyncClient):
+    resp = await dash_client.get(f"{BASE}/runs/dashboard-analytics?dataset_id=999999992")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_dashboard_summary_dataset_id_scopes_run_counts(dash_client: AsyncClient):
+    async with async_session_maker() as session:
+        ds = Dataset(name="dash_scope_chart_ds", description="")
+        session.add(ds)
+        await session.commit()
+        scoped_id = ds.id
+    base = (await dash_client.get(f"{BASE}/runs/dashboard-summary?dataset_id={scoped_id}")).json()
+    async with async_session_maker() as session:
+        await _seed_run_with_eval(
+            session,
+            status=STATUS_COMPLETED,
+            failure_type="UNKNOWN",
+            cost=0.01,
+            dataset_id=scoped_id,
+        )
+        await _seed_run_with_eval(
+            session,
+            status=STATUS_COMPLETED,
+            failure_type="UNKNOWN",
+            cost=0.02,
+            dataset_id=scoped_id,
+        )
+    scoped = (await dash_client.get(f"{BASE}/runs/dashboard-summary?dataset_id={scoped_id}")).json()
+    assert scoped["total_runs"] == base["total_runs"] + 2
+    assert scoped["scale"]["benchmark_datasets"] == 1
+    assert scoped["scale"]["total_queries"] >= base["scale"]["total_queries"] + 2
+
+
+@pytest.mark.asyncio
+async def test_dashboard_dataset_id_includes_benchmark_realism_runs(dash_client: AsyncClient):
+    """``?dataset_id=`` must match ``GET /runs``: realism batch rows are included when scoped."""
+    g0 = (await dash_client.get(f"{BASE}/runs/dashboard-summary")).json()
+    async with async_session_maker() as session:
+        ds = Dataset(name="dash_realism_scope_ds", description="")
+        session.add(ds)
+        await session.commit()
+        did = ds.id
+    base = (await dash_client.get(f"{BASE}/runs/dashboard-summary?dataset_id={did}")).json()
+    async with async_session_maker() as session:
+        await _seed_run_with_eval(
+            session,
+            status=STATUS_COMPLETED,
+            failure_type="NO_FAILURE",
+            cost=None,
+            dataset_id=did,
+            run_metadata={"benchmark_realism": True},
+            retrieval_latency_ms=77,
+            total_latency_ms=80,
+        )
+    scoped = (await dash_client.get(f"{BASE}/runs/dashboard-summary?dataset_id={did}")).json()
+    assert scoped["total_runs"] == base["total_runs"] + 1
+
+    g1 = (await dash_client.get(f"{BASE}/runs/dashboard-summary")).json()
+    assert g1["total_runs"] == g0["total_runs"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_analytics_matches_summary_for_dataset_id(dash_client: AsyncClient):
+    """Scoped summary retrieval avg aligns with scoped analytics distribution."""
+    async with async_session_maker() as session:
+        ds = Dataset(name="dash_lat_scope_ds", description="")
+        session.add(ds)
+        await session.flush()
+        did = ds.id
+        await _seed_run_with_eval(
+            session,
+            status=STATUS_COMPLETED,
+            failure_type="NO_FAILURE",
+            cost=None,
+            dataset_id=did,
+            retrieval_latency_ms=44,
+            total_latency_ms=50,
+        )
+    q = f"?dataset_id={did}"
+    s = (await dash_client.get(f"{BASE}/runs/dashboard-summary{q}")).json()
+    a = (await dash_client.get(f"{BASE}/runs/dashboard-analytics{q}")).json()
+    r_sum = s["latency"]["avg_retrieval_latency_ms"]
+    r_an = a["latency_distribution"]["retrieval"]["avg_ms"]
+    if r_sum is not None:
+        assert r_sum == pytest.approx(r_an)

@@ -9,8 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.benchmark_statistics import (
     RECOMMENDED_MIN_TRACED_RUNS_FOR_VALID_COMPARISON,
-    comparison_statistically_reliable,
-    confidence_tier_from_min_traced_runs,
+    RECOMMENDED_MIN_UNIQUE_QUERIES_FOR_VALID_COMPARISON,
+    comparison_statistically_reliable_by_effective_sample,
+    confidence_tier_from_effective_sample_size,
 )
 from app.domain.analytics_run_scope import SQL_RUNS_R_EXCLUDE_BENCHMARK_REALISM
 from app.domain.evaluator_bucket import sql_is_heuristic_bucket, sql_is_llm_bucket
@@ -23,46 +24,82 @@ from app.schemas.config_comparison import (
 
 _MAX_CONFIG_IDS = 64
 
-_DATASET_FILTER = """
-  AND EXISTS (
-    SELECT 1 FROM query_cases qc_ds
-    WHERE qc_ds.id = r.query_case_id AND qc_ds.dataset_id = :dataset_id
-  )
-"""
 
+def resolve_include_benchmark_realism_for_comparison(
+    dataset_id: int | None,
+    include_benchmark_realism: bool,
+) -> bool:
+    """Align with ``dashboard_aggregate_run_scope``: scoped comparisons include realism-tagged runs."""
+    return include_benchmark_realism or (dataset_id is not None)
+
+# Dataset scope matches ``dashboard_aggregate_run_scope``: filter via ``query_cases.dataset_id``.
+_DATASET_FILTER = "  AND qc.dataset_id = :dataset_id"
+
+# ``traced_runs`` / ``unique_query_count`` come from ``run_base`` only (retrieval + scope), not from
+# whether an ``evaluation_results`` row exists or matches the evaluator bucket.
 _MAIN_SQL = """
-SELECT
-  r.pipeline_config_id AS pipeline_config_id,
-  COUNT(*)::bigint AS traced_runs,
-  AVG(r.retrieval_latency_ms)::double precision AS avg_retrieval_latency_ms,
-  percentile_cont(0.95) WITHIN GROUP (ORDER BY r.retrieval_latency_ms)::double precision
-    AS p95_retrieval_latency_ms,
-  AVG(r.evaluation_latency_ms)::double precision AS avg_evaluation_latency_ms,
-  percentile_cont(0.95) WITHIN GROUP (ORDER BY r.evaluation_latency_ms)::double precision
-    AS p95_evaluation_latency_ms,
-  AVG(r.total_latency_ms)::double precision AS avg_total_latency_ms,
-  percentile_cont(0.95) WITHIN GROUP (ORDER BY r.total_latency_ms)::double precision
-    AS p95_total_latency_ms,
-  AVG(er.groundedness)::double precision AS avg_groundedness,
-  AVG(er.faithfulness)::double precision AS avg_faithfulness,
-  AVG(er.completeness)::double precision AS avg_completeness,
-  AVG(er.retrieval_relevance)::double precision AS avg_retrieval_relevance,
-  AVG(er.context_coverage)::double precision AS avg_context_coverage,
-  AVG(er.cost_usd::double precision)::double precision AS avg_evaluation_cost_per_run_usd,
-  STDDEV_SAMP(er.completeness)::double precision AS stddev_samp_completeness,
-  STDDEV_SAMP(er.faithfulness)::double precision AS stddev_samp_faithfulness,
-  STDDEV_SAMP(er.retrieval_relevance)::double precision AS stddev_samp_retrieval_relevance,
-  STDDEV_SAMP(er.context_coverage)::double precision AS stddev_samp_context_coverage,
-  STDDEV_SAMP(r.retrieval_latency_ms)::double precision AS stddev_samp_retrieval_latency_ms,
-  STDDEV_SAMP(r.total_latency_ms)::double precision AS stddev_samp_total_latency_ms
-FROM runs r
-INNER JOIN evaluation_results er ON er.run_id = r.id
-WHERE r.pipeline_config_id IN :pids
-  AND EXISTS (SELECT 1 FROM retrieval_results rr WHERE rr.run_id = r.id)
-  AND {realism_filter}
-  {dataset_filter}
+WITH run_base AS (
+  SELECT
+    r.id AS run_id,
+    r.pipeline_config_id AS pipeline_config_id,
+    r.query_case_id AS query_case_id,
+    r.retrieval_latency_ms AS retrieval_latency_ms,
+    r.evaluation_latency_ms AS evaluation_latency_ms,
+    r.total_latency_ms AS total_latency_ms
+  FROM runs r
+  INNER JOIN query_cases qc ON qc.id = r.query_case_id
+  WHERE r.pipeline_config_id IN :pids
+    AND EXISTS (SELECT 1 FROM retrieval_results rr WHERE rr.run_id = r.id)
+    AND {realism_filter}
+    {dataset_filter}
+),
+eval_agg AS (
+  SELECT
+    er.run_id AS run_id,
+    AVG(er.groundedness)::double precision AS groundedness,
+    AVG(er.faithfulness)::double precision AS faithfulness,
+    AVG(er.completeness)::double precision AS completeness,
+    AVG(er.retrieval_relevance)::double precision AS retrieval_relevance,
+    AVG(er.context_coverage)::double precision AS context_coverage,
+    AVG(er.cost_usd::double precision)::double precision AS cost_usd
+  FROM evaluation_results er
+  INNER JOIN runs r ON r.id = er.run_id
+  INNER JOIN query_cases qc ON qc.id = r.query_case_id
+  WHERE r.pipeline_config_id IN :pids
+    AND EXISTS (SELECT 1 FROM retrieval_results rr WHERE rr.run_id = r.id)
+    AND {realism_filter}
+    {dataset_filter}
 {bucket_filter}
-GROUP BY r.pipeline_config_id
+  GROUP BY er.run_id
+)
+SELECT
+  rb.pipeline_config_id AS pipeline_config_id,
+  COUNT(rb.run_id)::bigint AS traced_runs,
+  COUNT(DISTINCT rb.query_case_id)::bigint AS unique_query_count,
+  AVG(rb.retrieval_latency_ms)::double precision AS avg_retrieval_latency_ms,
+  percentile_cont(0.95) WITHIN GROUP (ORDER BY rb.retrieval_latency_ms)::double precision
+    AS p95_retrieval_latency_ms,
+  AVG(rb.evaluation_latency_ms)::double precision AS avg_evaluation_latency_ms,
+  percentile_cont(0.95) WITHIN GROUP (ORDER BY rb.evaluation_latency_ms)::double precision
+    AS p95_evaluation_latency_ms,
+  AVG(rb.total_latency_ms)::double precision AS avg_total_latency_ms,
+  percentile_cont(0.95) WITHIN GROUP (ORDER BY rb.total_latency_ms)::double precision
+    AS p95_total_latency_ms,
+  AVG(ea.groundedness)::double precision AS avg_groundedness,
+  AVG(ea.faithfulness)::double precision AS avg_faithfulness,
+  AVG(ea.completeness)::double precision AS avg_completeness,
+  AVG(ea.retrieval_relevance)::double precision AS avg_retrieval_relevance,
+  AVG(ea.context_coverage)::double precision AS avg_context_coverage,
+  AVG(ea.cost_usd)::double precision AS avg_evaluation_cost_per_run_usd,
+  STDDEV_SAMP(ea.completeness)::double precision AS stddev_samp_completeness,
+  STDDEV_SAMP(ea.faithfulness)::double precision AS stddev_samp_faithfulness,
+  STDDEV_SAMP(ea.retrieval_relevance)::double precision AS stddev_samp_retrieval_relevance,
+  STDDEV_SAMP(ea.context_coverage)::double precision AS stddev_samp_context_coverage,
+  STDDEV_SAMP(rb.retrieval_latency_ms)::double precision AS stddev_samp_retrieval_latency_ms,
+  STDDEV_SAMP(rb.total_latency_ms)::double precision AS stddev_samp_total_latency_ms
+FROM run_base rb
+LEFT JOIN eval_agg ea ON ea.run_id = rb.run_id
+GROUP BY rb.pipeline_config_id
 """
 
 _FAIL_SQL = """
@@ -71,6 +108,7 @@ SELECT
   COALESCE(NULLIF(BTRIM(er.failure_type::text), ''), 'UNKNOWN') AS failure_type,
   COUNT(*)::bigint AS cnt
 FROM runs r
+INNER JOIN query_cases qc ON qc.id = r.query_case_id
 INNER JOIN evaluation_results er ON er.run_id = r.id
 WHERE r.pipeline_config_id IN :pids
   AND EXISTS (SELECT 1 FROM retrieval_results rr WHERE rr.run_id = r.id)
@@ -83,12 +121,11 @@ GROUP BY r.pipeline_config_id, COALESCE(NULLIF(BTRIM(er.failure_type::text), '')
 _QUERY_SET_SQL = """
 SELECT DISTINCT r.pipeline_config_id AS pipeline_config_id, r.query_case_id AS query_case_id
 FROM runs r
-INNER JOIN evaluation_results er ON er.run_id = r.id
+INNER JOIN query_cases qc ON qc.id = r.query_case_id
 WHERE r.pipeline_config_id IN :pids
   AND EXISTS (SELECT 1 FROM retrieval_results rr WHERE rr.run_id = r.id)
   AND {realism_filter}
   {dataset_filter}
-{bucket_filter}
 """
 
 
@@ -183,13 +220,21 @@ def _comparison_confidence_fields(rows: list[ConfigComparisonMetrics]) -> dict:
             "comparison_statistically_reliable": False,
             "min_traced_runs_across_configs": 0,
             "recommended_min_traced_runs_for_valid_comparison": RECOMMENDED_MIN_TRACED_RUNS_FOR_VALID_COMPARISON,
+            "unique_queries_compared": 0,
+            "effective_sample_size": 0,
+            "recommended_min_unique_queries_for_valid_comparison": RECOMMENDED_MIN_UNIQUE_QUERIES_FOR_VALID_COMPARISON,
         }
     m = min(r.traced_runs for r in rows)
+    min_unique = min(r.unique_query_count for r in rows)
+    effective = min_unique
     return {
-        "comparison_confidence": confidence_tier_from_min_traced_runs(m),
-        "comparison_statistically_reliable": comparison_statistically_reliable(m),
+        "comparison_confidence": confidence_tier_from_effective_sample_size(effective),
+        "comparison_statistically_reliable": comparison_statistically_reliable_by_effective_sample(effective),
         "min_traced_runs_across_configs": m,
         "recommended_min_traced_runs_for_valid_comparison": RECOMMENDED_MIN_TRACED_RUNS_FOR_VALID_COMPARISON,
+        "unique_queries_compared": effective,
+        "effective_sample_size": effective,
+        "recommended_min_unique_queries_for_valid_comparison": RECOMMENDED_MIN_UNIQUE_QUERIES_FOR_VALID_COMPARISON,
     }
 
 
@@ -323,6 +368,7 @@ def _build_metrics_list(
                 ConfigComparisonMetrics(
                     pipeline_config_id=pid,
                     traced_runs=0,
+                    unique_query_count=0,
                     avg_faithfulness=None,
                     failure_type_counts=dict(fmap),
                 )
@@ -332,6 +378,7 @@ def _build_metrics_list(
             ConfigComparisonMetrics(
                 pipeline_config_id=pid,
                 traced_runs=int(m["traced_runs"]),
+                unique_query_count=int(m["unique_query_count"]),
                 avg_retrieval_latency_ms=_metric_float(m.get("avg_retrieval_latency_ms")),
                 p95_retrieval_latency_ms=_metric_float(m.get("p95_retrieval_latency_ms")),
                 avg_evaluation_latency_ms=_metric_float(m.get("avg_evaluation_latency_ms")),
@@ -391,7 +438,7 @@ async def compare_pipeline_configs(
         effective_min = max(2, min_traced_runs or 2)
     require_same_q = strict_comparison
 
-    ibr = include_benchmark_realism
+    ibr = resolve_include_benchmark_realism_for_comparison(dataset_id, include_benchmark_realism)
 
     if evaluator_type == "heuristic":
         qsets = await _query_query_case_sets(session, pids, "heuristic", dataset_id, ibr)

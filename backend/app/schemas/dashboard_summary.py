@@ -53,9 +53,9 @@ class DashboardLatencySummary(BaseModel):
     over the same non-null ``retrieval_latency_ms`` rows as the mean (see
     ``phase_latency_distribution``).
 
-    ``avg_total_latency_ms`` and ``end_to_end_run_latency_*_sec`` use the same non-null
-    ``runs.total_latency_ms`` population (mean + ``percentile_cont(0.95)``); seconds are
-    milliseconds / 1000. ``None`` = insufficient data (no samples).
+    ``avg_total_latency_ms``, ``total_latency_p50_ms``, and ``end_to_end_run_latency_*_sec`` use the
+    same non-null ``runs.total_latency_ms`` population (mean + ``percentile_cont(0.5/0.95)``); seconds
+    are milliseconds / 1000. ``None`` = insufficient data (no samples).
     """
 
     avg_retrieval_latency_ms: float | None = None
@@ -64,7 +64,9 @@ class DashboardLatencySummary(BaseModel):
     avg_generation_latency_ms: float | None = None
     avg_evaluation_latency_ms: float | None = None
     avg_total_latency_ms: float | None = None
+    total_latency_p50_ms: float | None = None
     end_to_end_run_latency_avg_sec: float | None = None
+    end_to_end_run_latency_p50_sec: float | None = None
     end_to_end_run_latency_p95_sec: float | None = None
 
 
@@ -109,10 +111,18 @@ class DashboardRecentRun(BaseModel):
 
 class DashboardSummaryResponse(BaseModel):
     total_runs: int
+    repeated_sampling_note: str = Field(
+        description="Plain-language reminder that run count can exceed unique query cases (repeated sampling).",
+    )
     scale: DashboardScaleMetrics
     status_counts: DashboardStatusCounts
     evaluator_counts: DashboardEvaluatorCounts
     latency: DashboardLatencySummary
     cost: DashboardCostSummary
     failure_type_counts: dict[str, int] = Field(default_factory=dict)
+    """Counts per persisted ``failure_type`` (includes ``NO_FAILURE`` when present)."""
+
+    model_failures: int = 0
+    """Evaluation rows on **organic** runs where ``failure_type`` is set and not ``NO_FAILURE`` (quality / retrieval labels)."""
+
     recent_runs: list[DashboardRecentRun]

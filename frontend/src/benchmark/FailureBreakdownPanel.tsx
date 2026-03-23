@@ -19,14 +19,26 @@ export function FailureBreakdownPanel({
   const sorted = sortedFailureCounts(data.overall_counts)
   const totalFailures = sorted.reduce((s, [, c]) => s + c, 0)
   const isEmpty = totalFailures === 0
+  const maxFailCount = sorted[0]?.[1] ?? 0
+  const retrievalPartialDominant =
+    maxFailCount > 0 &&
+    sorted.some(([ft, c]) => ft === 'RETRIEVAL_PARTIAL' && c === maxFailCount)
 
   return (
     <section className="cl-card" aria-label="Failure breakdown" data-testid="failure-breakdown">
       <h2>Failure Breakdown</h2>
       <p className="cl-muted">
-        From <code>analytics.failure_analysis</code> — <code>overall_counts</code> and{' '}
-        <code>overall_percentages</code>.
+        From <code>analytics.failure_analysis</code>. <strong>Overall</strong> counts are evaluation{' '}
+        <code>failure_type</code> labels (excluding <code>NO_FAILURE</code>), not run <code>status</code>.{' '}
+        <strong>Recent failed runs</strong> lists runs whose <code>status</code> is system{' '}
+        <code>failed</code>.
       </p>
+
+      {retrievalPartialDominant ? (
+        <p className="cl-muted cl-failure-interpretation-note" data-testid="failure-retrieval-partial-dominant-note">
+          Most failures are retrieval-related → likely caused by noisy top_k results or weak chunk relevance.
+        </p>
+      ) : null}
 
       {isEmpty ? (
         <p className="cl-muted cl-empty-inline">No failures recorded.</p>
@@ -110,7 +122,7 @@ export function FailureBreakdownPanel({
 
       {!isEmpty && data.recent_failed_runs.length > 0 ? (
         <>
-          <h3>Recent failed runs</h3>
+          <h3>Recent system-failed runs</h3>
           <div className="cl-table-wrap">
             <table className="cl-table">
               <thead>

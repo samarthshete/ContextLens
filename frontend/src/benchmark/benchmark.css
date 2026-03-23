@@ -194,6 +194,17 @@
   }
 }
 
+.cl-msg-warn {
+  background: rgba(217, 119, 6, 0.14);
+  color: #b45309;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cl-msg-warn {
+    color: #fcd34d;
+  }
+}
+
 .cl-msg-ok {
   background: var(--accent-bg);
   color: var(--text-h);
@@ -797,6 +808,33 @@ a.cl-hit-source-link:hover {
   margin: 0;
 }
 
+.cl-dash-dataset-field {
+  margin: 0.5rem 0 0.75rem;
+  max-width: 28rem;
+}
+
+.cl-dash-dataset-field label {
+  display: block;
+  font-size: 0.8rem;
+  margin-bottom: 0.25rem;
+  color: var(--muted);
+}
+
+.cl-dash-repeated-sampling {
+  margin: 0.5rem 0 0;
+  font-size: 0.9rem;
+}
+
+.cl-dash-model-quality-insight {
+  border-left: 3px solid var(--accent-border, #6366f1);
+}
+
+.cl-dash-model-quality-insight-text {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
 .cl-dash-scale-note {
   font-size: 0.875rem;
   margin: 0.25rem 0 1rem;
@@ -1155,6 +1193,35 @@ a.cl-hit-source-link:hover {
   margin: 0;
   font-variant-numeric: tabular-nums;
   color: var(--text-h);
+}
+
+.cl-latency-phase-row--primary dt {
+  color: var(--text-h);
+  font-weight: 600;
+}
+
+.cl-latency-phase-row--avg-secondary dt,
+.cl-latency-phase-row--avg-secondary dd {
+  color: var(--text-muted, var(--text-h));
+  font-size: 0.85rem;
+}
+
+.cl-latency-median-note {
+  margin: 0.35rem 0 0;
+  font-size: 0.88rem;
+}
+
+.cl-dash-latency-mean-secondary {
+  opacity: 0.68;
+  font-size: 0.86em;
+  color: var(--text-muted, var(--text-h));
+}
+
+.cl-score-comparison-caveat {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.88rem;
+  color: var(--text-muted, var(--text-h));
 }
 
 /* Failure breakdown */

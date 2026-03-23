@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from sqlalchemy import func, not_, or_, select, text
+from sqlalchemy import func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.domain.analytics_run_scope import SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM
+from app.domain.dashboard_dataset_scope import dashboard_aggregate_run_scope
 from app.models import EvaluationResult, PipelineConfig, Run
 from app.services.phase_latency_distribution import get_phase_latency_distribution
 from app.schemas.dashboard_analytics import (
@@ -30,7 +30,12 @@ def _f(v: object | None) -> float | None:
     return float(v) if not isinstance(v, float) else v
 
 
-async def _time_series(session: AsyncSession) -> list[TimeSeriesDay]:
+def _dashboard_run_scope(dataset_id: int | None):
+    """Global: organic only. Scoped: all runs for dataset (matches ``GET /runs?dataset_id=``)."""
+    return dashboard_aggregate_run_scope(Run, dataset_id)
+
+
+async def _time_series(session: AsyncSession, dataset_id: int | None) -> list[TimeSeriesDay]:
     """Runs aggregated by calendar day (last 90 days max, newest first)."""
     date_col = func.date(Run.created_at).label("day")
 
@@ -42,7 +47,7 @@ async def _time_series(session: AsyncSession) -> list[TimeSeriesDay]:
             EvaluationResult.failure_type.isnot(None),
             EvaluationResult.failure_type != "",
             EvaluationResult.failure_type != "NO_FAILURE",
-            text(SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM),
+            _dashboard_run_scope(dataset_id),
         )
     )
 
@@ -58,7 +63,7 @@ async def _time_series(session: AsyncSession) -> list[TimeSeriesDay]:
         .join(Run, Run.id == EvaluationResult.run_id)
         .where(
             EvaluationResult.cost_usd.isnot(None),
-            text(SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM),
+            _dashboard_run_scope(dataset_id),
         )
         .group_by(EvaluationResult.run_id)
     ).subquery("run_cost")
@@ -81,7 +86,7 @@ async def _time_series(session: AsyncSession) -> list[TimeSeriesDay]:
         )
         .select_from(Run)
         .outerjoin(run_cost_sq, run_cost_sq.c.run_id == Run.id)
-        .where(text(SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM))
+        .where(_dashboard_run_scope(dataset_id))
         .group_by(date_col)
         .order_by(date_col.desc())
         .limit(90)
@@ -101,10 +106,10 @@ async def _time_series(session: AsyncSession) -> list[TimeSeriesDay]:
     ]
 
 
-async def _latency_distribution(session: AsyncSession) -> LatencyDistributionSection:
+async def _latency_distribution(session: AsyncSession, dataset_id: int | None) -> LatencyDistributionSection:
     """Min/max/avg/median/p95 for each latency phase (shared SQL via ``phase_latency_distribution``)."""
 
-    excl = {"exclude_benchmark_realism_runs": True}
+    excl = {"dataset_id": dataset_id}
     return LatencyDistributionSection(
         retrieval=await get_phase_latency_distribution(session, Run.retrieval_latency_ms, **excl),
         generation=await get_phase_latency_distribution(session, Run.generation_latency_ms, **excl),
@@ -113,7 +118,7 @@ async def _latency_distribution(session: AsyncSession) -> LatencyDistributionSec
     )
 
 
-async def _failure_analysis(session: AsyncSession) -> FailureAnalysisSection:
+async def _failure_analysis(session: AsyncSession, dataset_id: int | None) -> FailureAnalysisSection:
     """Overall failure counts/percentages, per-config breakdown, recent failed runs."""
 
     # Overall failure counts
@@ -125,7 +130,7 @@ async def _failure_analysis(session: AsyncSession) -> FailureAnalysisSection:
                 EvaluationResult.failure_type.isnot(None),
                 EvaluationResult.failure_type != "",
                 EvaluationResult.failure_type != "NO_FAILURE",
-                text(SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM),
+                _dashboard_run_scope(dataset_id),
             )
             .group_by(EvaluationResult.failure_type)
         )
@@ -153,7 +158,7 @@ async def _failure_analysis(session: AsyncSession) -> FailureAnalysisSection:
                 EvaluationResult.failure_type.isnot(None),
                 EvaluationResult.failure_type != "",
                 EvaluationResult.failure_type != "NO_FAILURE",
-                text(SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM),
+                _dashboard_run_scope(dataset_id),
             )
             .group_by(Run.pipeline_config_id, PipelineConfig.name, EvaluationResult.failure_type)
             .order_by(Run.pipeline_config_id)
@@ -175,7 +180,7 @@ async def _failure_analysis(session: AsyncSession) -> FailureAnalysisSection:
         .outerjoin(EvaluationResult, EvaluationResult.run_id == Run.id)
         .where(
             Run.status == "failed",
-            text(SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM),
+            _dashboard_run_scope(dataset_id),
         )
         .order_by(Run.created_at.desc(), Run.id.desc())
         .limit(10)
@@ -211,6 +216,7 @@ def _evaluation_in_llm_bucket(er: Any) -> Any:
 async def _config_insights_for_bucket(
     session: AsyncSession,
     bucket: Literal["heuristic", "llm"],
+    dataset_id: int | None,
 ) -> list[ConfigInsight]:
     """Per-config metrics for traced runs whose evaluation row is in *bucket* only."""
 
@@ -228,7 +234,7 @@ async def _config_insights_for_bucket(
         .where(
             er.cost_usd.isnot(None),
             bucket_pred,
-            text(SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM),
+            _dashboard_run_scope(dataset_id),
         )
         .group_by(er.run_id)
     ).subquery("run_cost")
@@ -270,7 +276,7 @@ async def _config_insights_for_bucket(
         .select_from(PipelineConfig)
         .join(Run, Run.pipeline_config_id == PipelineConfig.id)
         .join(er, er.run_id == Run.id)
-        .where(bucket_pred)
+        .where(bucket_pred, _dashboard_run_scope(dataset_id))
         .outerjoin(config_cost_sq, config_cost_sq.c.pc_id == PipelineConfig.id)
         .group_by(PipelineConfig.id, PipelineConfig.name)
         .order_by(PipelineConfig.id)
@@ -294,7 +300,7 @@ async def _config_insights_for_bucket(
             er_top.failure_type.isnot(None),
             er_top.failure_type != "",
             er_top.failure_type != "NO_FAILURE",
-            text(SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM),
+            _dashboard_run_scope(dataset_id),
         )
         .group_by(Run.pipeline_config_id, er_top.failure_type)
     )
@@ -331,16 +337,16 @@ async def _config_insights_for_bucket(
     ]
 
 
-async def _config_insights(session: AsyncSession) -> ConfigInsightsByEvaluatorBucket:
+async def _config_insights(session: AsyncSession, dataset_id: int | None) -> ConfigInsightsByEvaluatorBucket:
     """Heuristic and LLM config insight rows — never blended."""
-    heuristic = await _config_insights_for_bucket(session, "heuristic")
-    llm = await _config_insights_for_bucket(session, "llm")
+    heuristic = await _config_insights_for_bucket(session, "heuristic", dataset_id)
+    llm = await _config_insights_for_bucket(session, "llm", dataset_id)
     return ConfigInsightsByEvaluatorBucket(heuristic=heuristic, llm=llm)
 
 
-async def get_dashboard_analytics(session: AsyncSession) -> DashboardAnalyticsResponse:
+async def get_dashboard_analytics(session: AsyncSession, dataset_id: int | None = None) -> DashboardAnalyticsResponse:
     """Compute all analytics sections."""
-    latency_distribution = await _latency_distribution(session)
+    latency_distribution = await _latency_distribution(session, dataset_id)
     total = latency_distribution.total
     avg_sec: float | None = None
     p95_sec: float | None = None
@@ -350,10 +356,10 @@ async def get_dashboard_analytics(session: AsyncSession) -> DashboardAnalyticsRe
         if total.p95_ms is not None:
             p95_sec = float(total.p95_ms) / 1000.0
     return DashboardAnalyticsResponse(
-        time_series=await _time_series(session),
+        time_series=await _time_series(session, dataset_id),
         latency_distribution=latency_distribution,
         end_to_end_run_latency_avg_sec=avg_sec,
         end_to_end_run_latency_p95_sec=p95_sec,
-        failure_analysis=await _failure_analysis(session),
-        config_insights=await _config_insights(session),
+        failure_analysis=await _failure_analysis(session, dataset_id),
+        config_insights=await _config_insights(session, dataset_id),
     )

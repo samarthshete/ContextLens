@@ -30,6 +30,9 @@ export function emptyConfigComparisonBoth(
     comparison_statistically_reliable: false,
     min_traced_runs_across_configs: 0,
     recommended_min_traced_runs_for_valid_comparison: 20,
+    unique_queries_compared: 0,
+    effective_sample_size: 0,
+    recommended_min_unique_queries_for_valid_comparison: 10,
     ...over,
   }
 }

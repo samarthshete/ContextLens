@@ -4,7 +4,10 @@ import { installApiMetaRoute } from './fixtures'
 async function mockDashboardApi(page: Page) {
   await installApiMetaRoute(page)
   await page.route('**/api/v1/datasets', (route) =>
-    route.fulfill({ json: [], contentType: 'application/json' }),
+    route.fulfill({
+      json: [{ id: 1, name: 'E2E DS', description: null, created_at: '2026-03-20T12:00:00.000Z' }],
+      contentType: 'application/json',
+    }),
   )
   await page.route('**/api/v1/pipeline-configs', (route) =>
     route.fulfill({ json: [], contentType: 'application/json' }),
@@ -12,7 +15,7 @@ async function mockDashboardApi(page: Page) {
   await page.route('**/api/v1/documents', (route) =>
     route.fulfill({ json: [], contentType: 'application/json' }),
   )
-  await page.route('**/api/v1/runs/dashboard-summary', (route) =>
+  await page.route('**/api/v1/runs/dashboard-summary*', (route) =>
     route.fulfill({
       json: {
         total_runs: 2,
@@ -33,7 +36,9 @@ async function mockDashboardApi(page: Page) {
           avg_generation_latency_ms: null,
           avg_evaluation_latency_ms: 5,
           avg_total_latency_ms: 20,
+          total_latency_p50_ms: 20,
           end_to_end_run_latency_avg_sec: 0.02,
+          end_to_end_run_latency_p50_sec: 0.02,
           end_to_end_run_latency_p95_sec: 0.025,
         },
         cost: {
@@ -41,14 +46,21 @@ async function mockDashboardApi(page: Page) {
           avg_cost_usd: null,
           evaluation_rows_with_cost: 0,
           evaluation_rows_cost_not_available: 2,
+          avg_cost_usd_per_llm_run: null,
+          llm_runs_with_measured_cost: 0,
+          avg_cost_usd_per_full_rag_run: null,
+          full_rag_runs_with_measured_cost: 0,
         },
         failure_type_counts: {},
+        model_failures: 0,
         recent_runs: [],
+        repeated_sampling_note:
+          '2 runs across 4 unique queries (repeated sampling; results are directional, not broad generalization)',
       },
       contentType: 'application/json',
     }),
   )
-  await page.route('**/api/v1/runs/dashboard-analytics', (route) =>
+  await page.route('**/api/v1/runs/dashboard-analytics*', (route) =>
     route.fulfill({
       json: {
         time_series: [

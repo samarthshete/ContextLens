@@ -82,9 +82,9 @@ Prefix: `/api/v1`
 | `POST /runs` | Execute a benchmark run (heuristic: 201 sync; full: 202 + RQ job) |
 | `GET /runs` | Paginated list with filters (status, evaluator, dataset, config) |
 | `GET /runs/{id}` | Full trace: retrieval hits, generation, evaluation, timings |
-| `GET /runs/dashboard-summary` | Aggregate stats: counts, latency, cost, failures |
-| `GET /runs/dashboard-analytics` | Time series, latency distribution, failure breakdown, config insights |
-| `GET /runs/config-comparison` | Per-config aggregates with evaluator bucketing |
+| `GET /runs/dashboard-summary` | Aggregate stats: counts (`status` vs `model_failures` on eval rows), latency (retrieval P50/P95 + mean; total mean + **`total_latency_p50_ms`** + **`end_to_end_run_latency_p50_sec`** / avg / P95 seconds — same SQL population as `phase_latency_distribution` for `total_latency_ms`), `repeated_sampling_note`, cost, `failure_type_counts`. Optional `dataset_id` scopes run-derived fields; **404** if missing. Latency is directional (local cold-start skew), not a benchmark score. |
+| `GET /runs/dashboard-analytics` | Time series, latency distribution (per-phase min/max/avg/median/p95), failure breakdown, config insights. Same optional `dataset_id` and **404** as dashboard-summary. |
+| `GET /runs/config-comparison` | Per-config aggregates with heuristic/LLM bucketing. **`traced_runs`** / **`unique_query_count`** count scoped runs with ≥1 retrieval row (`run_base` CTE), independent of whether an eval row exists in that bucket; score/latency averages join eval where applicable. Returns **`comparison_confidence`**, **`effective_sample_size`** (min distinct `query_case_id` across configs), **`comparison_statistically_reliable`** (≥10 unique queries vs `recommended_min_unique_queries_for_valid_comparison`). |
 | `GET /runs/{id}/queue-status` | Redis lock + RQ job state for full runs |
 | `POST /runs/{id}/requeue` | Re-submit eligible failed full runs |
 | `POST /documents` | Upload, parse, chunk, embed in one request |
@@ -105,6 +105,8 @@ Two evaluator modes, never blended in aggregations:
 10 types in `app/domain/failure_taxonomy.py`: `NO_FAILURE`, `RETRIEVAL_MISS`, `RETRIEVAL_PARTIAL`, `CHUNK_FRAGMENTATION`, `CONTEXT_INSUFFICIENT`, `CONTEXT_TRUNCATION`, `ANSWER_UNSUPPORTED`, `ANSWER_INCOMPLETE`, `MIXED_FAILURE`, `UNKNOWN`.
 
 All failure types are normalized via `normalize_failure_type()` before persistence.
+
+**Dashboard semantics:** taxonomy values on `evaluation_results.failure_type` are **model-/evaluation-level** labels. **`runs.status = failed`** is a separate **system** (pipeline) outcome. The summary exposes both: status-derived **failed** count (labeled *system failures* in the UI) and **`model_failures`** (count of evaluation rows where `failure_type` is set and not `NO_FAILURE`, same organic run scope as other summary aggregates). **`scale.total_traced_runs`** counts scoped runs with an **`evaluation_results`** row only (differs from `aggregate.py` **`total_traced_runs`**, which also requires **`retrieval_results`**). **`scale.configs_tested`** is **`COUNT(DISTINCT pipeline_config_id)`** on scoped runs. **`GET /runs/config-comparison`** uses **`traced_runs`** = scoped runs with retrieval (see service SQL); `aggregate.py` “traced” = retrieval + evaluation.
 
 ---
 
@@ -129,6 +131,6 @@ The run detail view computes diagnosis, diff, timeline, and source labels entire
 
 ## Testing
 
-- **203 pytest tests** — fully offline via deterministic fake embeddings in `conftest.py`
-- **200 Vitest tests** — component + logic tests with mocked API
+- **215 pytest tests** — fully offline via deterministic fake embeddings in `conftest.py`
+- **227 Vitest tests** — component + logic tests with mocked API
 - **14 Playwright E2E tests** — `page.route()` API mocking, no backend required

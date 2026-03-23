@@ -270,13 +270,22 @@ async def test_list_runs_and_config_comparison(run_client: AsyncClient):
     assert cmp_body.get("comparison_confidence") in ("LOW", "MEDIUM", "HIGH")
     assert "comparison_statistically_reliable" in cmp_body
     assert cmp_body.get("recommended_min_traced_runs_for_valid_comparison") == 20
+    assert cmp_body.get("recommended_min_unique_queries_for_valid_comparison") == 10
+    # traced_runs / unique_query_count count all scoped runs with retrieval (dashboard scope),
+    # not whether the run has an evaluation row in this bucket.
+    assert cmp_body.get("unique_queries_compared") == 1
+    assert cmp_body.get("effective_sample_size") == 1
     b = cmp_body["buckets"]
     h_by = {x["pipeline_config_id"]: x for x in b["heuristic"]}
     l_by = {x["pipeline_config_id"]: x for x in b["llm"]}
     assert h_by[pid_h]["traced_runs"] == 1
-    assert h_by[pid_l]["traced_runs"] == 0
-    assert l_by[pid_h]["traced_runs"] == 0
+    assert h_by[pid_h]["unique_query_count"] == 1
+    assert h_by[pid_l]["traced_runs"] == 1
+    assert h_by[pid_l]["unique_query_count"] == 1
+    assert l_by[pid_h]["traced_runs"] == 1
+    assert l_by[pid_h]["unique_query_count"] == 1
     assert l_by[pid_l]["traced_runs"] == 1
+    assert l_by[pid_l]["unique_query_count"] == 1
     assert l_by[pid_l]["avg_groundedness"] == pytest.approx(0.85)
     assert l_by[pid_l]["avg_faithfulness"] == pytest.approx(0.9)
     scb = cmp_body["score_comparison_buckets"]

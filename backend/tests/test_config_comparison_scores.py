@@ -5,7 +5,12 @@ import pytest
 pytestmark = pytest.mark.no_database_cleanup
 
 from app.schemas.config_comparison import ConfigComparisonMetrics
-from app.services.config_comparison import build_config_score_comparison, _realism_filter_sql
+from app.services.config_comparison import (
+    _comparison_confidence_fields,
+    _realism_filter_sql,
+    build_config_score_comparison,
+    resolve_include_benchmark_realism_for_comparison,
+)
 from app.domain.analytics_run_scope import SQL_RUNS_R_EXCLUDE_BENCHMARK_REALISM
 
 
@@ -130,3 +135,41 @@ def test_realism_filter_sql_exclude_by_default():
 
 def test_realism_filter_sql_include_returns_true():
     assert _realism_filter_sql(True) == "TRUE"
+
+
+def test_resolve_include_benchmark_realism_for_comparison():
+    assert resolve_include_benchmark_realism_for_comparison(None, False) is False
+    assert resolve_include_benchmark_realism_for_comparison(None, True) is True
+    assert resolve_include_benchmark_realism_for_comparison(42, False) is True
+    assert resolve_include_benchmark_realism_for_comparison(42, True) is True
+
+
+def test_comparison_confidence_prefers_effective_sample_over_traced_repeats():
+    rows = [
+        ConfigComparisonMetrics(pipeline_config_id=1, traced_runs=24, unique_query_count=6),
+        ConfigComparisonMetrics(pipeline_config_id=2, traced_runs=24, unique_query_count=6),
+    ]
+    d = _comparison_confidence_fields(rows)
+    assert d["unique_queries_compared"] == 6
+    assert d["effective_sample_size"] == 6
+    assert d["min_traced_runs_across_configs"] == 24
+    assert d["comparison_confidence"] == "LOW"
+    assert d["comparison_statistically_reliable"] is False
+    assert d["recommended_min_unique_queries_for_valid_comparison"] == 10
+
+
+def test_comparison_statistically_reliable_when_unique_queries_sufficient():
+    rows = [
+        ConfigComparisonMetrics(pipeline_config_id=1, traced_runs=3, unique_query_count=12),
+        ConfigComparisonMetrics(pipeline_config_id=2, traced_runs=3, unique_query_count=12),
+    ]
+    d = _comparison_confidence_fields(rows)
+    assert d["comparison_confidence"] == "MEDIUM"
+    assert d["comparison_statistically_reliable"] is True
+
+
+def test_comparison_confidence_empty_rows():
+    d = _comparison_confidence_fields([])
+    assert d["effective_sample_size"] == 0
+    assert d["unique_queries_compared"] == 0
+    assert d["comparison_statistically_reliable"] is False

@@ -53,6 +53,8 @@ function minimalRun(over: Partial<RunDetail> = {}): RunDetail {
 function tinySummary(): DashboardSummaryResponse {
   return {
     total_runs: 2,
+    repeated_sampling_note:
+      '2 runs across 4 unique queries (repeated sampling; results are directional, not broad generalization)',
     scale: {
       benchmark_datasets: 1,
       total_queries: 4,
@@ -70,7 +72,9 @@ function tinySummary(): DashboardSummaryResponse {
       avg_generation_latency_ms: null,
       avg_evaluation_latency_ms: null,
       avg_total_latency_ms: 20,
+      total_latency_p50_ms: 19,
       end_to_end_run_latency_avg_sec: 0.02,
+      end_to_end_run_latency_p50_sec: 0.019,
       end_to_end_run_latency_p95_sec: 0.03,
     },
     cost: {
@@ -84,6 +88,7 @@ function tinySummary(): DashboardSummaryResponse {
       full_rag_runs_with_measured_cost: 0,
     },
     failure_type_counts: { UNKNOWN: 1 },
+    model_failures: 1,
     recent_runs: [
       {
         run_id: 5,
@@ -226,11 +231,16 @@ describe('exportDownload', () => {
     const csv = buildDashboardExportCsv(tinySummary(), null)
     expect(csv).toContain('section,recent_runs')
     expect(csv).toMatch(/\n5,completed,2026-03-01T00:00:00Z,/)
+    expect(csv).toContain('latency_total_p50_ms,19')
+    expect(csv).toContain('end_to_end_run_latency_p50_sec,0.019')
     expect(csv).toContain('end_to_end_run_latency_avg_sec,0.02')
     expect(csv).toContain('scale_benchmark_datasets,1')
     expect(csv).toContain('scale_chunks_indexed,5')
     expect(csv).toContain('cost_llm_runs_with_measured_cost,0')
     expect(csv).toContain('cost_full_rag_runs_with_measured_cost,0')
+    expect(csv).toContain('model_failures,1')
+    expect(csv).toContain('repeated_sampling_note,')
+    expect(csv).toContain('repeated sampling')
     expect(csv).not.toContain('section,time_series_daily')
   })
 

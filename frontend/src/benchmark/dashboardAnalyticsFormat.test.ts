@@ -3,11 +3,13 @@ import type { ConfigInsight, LatencyDistribution, TimeSeriesDay } from '../api/t
 import {
   barWidthPct,
   computeConfigInsightBadgeWinners,
+  computeTopKSpeedRelevanceTradeoffNote,
   configInsightRowClasses,
   configInsightRowIsHighlighted,
   failureTypeBarPercents,
   formatDistRow,
   formatInsightTimestamp,
+  inferTopKFromConfigName,
   formatPercent,
   formatScore,
   latencyPhaseScaleMs,
@@ -265,6 +267,58 @@ describe('dashboardAnalyticsFormat', () => {
       const rows = failureTypeBarPercents(sorted, 4)
       expect(rows[0].barPct).toBe(75)
       expect(rows[1].barPct).toBe(25)
+    })
+  })
+
+  describe('inferTopKFromConfigName', () => {
+    it('parses common benchmark name patterns', () => {
+      expect(inferTopKFromConfigName('stress_topk8')).toBe(8)
+      expect(inferTopKFromConfigName('evidence_topk3')).toBe(3)
+      expect(inferTopKFromConfigName('no match here')).toBeNull()
+    })
+  })
+
+  describe('computeTopKSpeedRelevanceTradeoffNote', () => {
+    it('returns tradeoff when higher top_k is faster with worse relevance', () => {
+      const rows: ConfigInsight[] = [
+        insight({
+          pipeline_config_id: 1,
+          pipeline_config_name: 'stress_topk3',
+          traced_runs: 5,
+          avg_total_latency_ms: 200,
+          avg_retrieval_relevance: 0.7,
+        }),
+        insight({
+          pipeline_config_id: 2,
+          pipeline_config_name: 'stress_topk8',
+          traced_runs: 5,
+          avg_total_latency_ms: 120,
+          avg_retrieval_relevance: 0.45,
+        }),
+      ]
+      const note = computeTopKSpeedRelevanceTradeoffNote(rows)
+      expect(note).toContain('Tradeoff')
+      expect(note).toContain('top_k')
+    })
+
+    it('returns null when latency or relevance do not match pattern', () => {
+      const rows: ConfigInsight[] = [
+        insight({
+          pipeline_config_id: 1,
+          pipeline_config_name: 'stress_topk3',
+          traced_runs: 5,
+          avg_total_latency_ms: 100,
+          avg_retrieval_relevance: 0.5,
+        }),
+        insight({
+          pipeline_config_id: 2,
+          pipeline_config_name: 'stress_topk8',
+          traced_runs: 5,
+          avg_total_latency_ms: 200,
+          avg_retrieval_relevance: 0.6,
+        }),
+      ]
+      expect(computeTopKSpeedRelevanceTradeoffNote(rows)).toBeNull()
     })
   })
 

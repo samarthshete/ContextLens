@@ -12,6 +12,11 @@ ComparisonConfidence = Literal["LOW", "MEDIUM", "HIGH"]
 class ConfigComparisonMetrics(BaseModel):
     pipeline_config_id: int
     traced_runs: int = Field(ge=0)
+    unique_query_count: int = Field(
+        default=0,
+        ge=0,
+        description="COUNT(DISTINCT query_case_id) for traced runs in this bucket row.",
+    )
     avg_faithfulness: float | None = None
     """``AVG(evaluation_results.faithfulness)`` over traced runs in this bucket (non-null only)."""
     avg_retrieval_latency_ms: float | None = None
@@ -99,14 +104,29 @@ class ConfigComparisonResponse(BaseModel):
         description="Minimum traced runs per config that was enforced (null if none).",
     )
     comparison_confidence: ComparisonConfidence = Field(
-        description="Heuristic tier from min traced_runs across configs in this response (LOW/MEDIUM/HIGH).",
+        description="Heuristic tier from effective_sample_size (distinct queries), not raw traced runs alone.",
     )
     comparison_statistically_reliable: bool = Field(
-        description="True when min traced_runs across configs >= recommended threshold (default 20).",
+        description="True when effective_sample_size >= recommended_min_unique_queries_for_valid_comparison (default 10).",
     )
     min_traced_runs_across_configs: int = Field(ge=0)
     recommended_min_traced_runs_for_valid_comparison: int = Field(
         default=20,
         ge=1,
-        description="Documented minimum runs per config for high-confidence comparisons.",
+        description="Documented minimum traced runs per config for volume context (repeat runs do not add distinct queries).",
+    )
+    unique_queries_compared: int = Field(
+        default=0,
+        ge=0,
+        description="Min unique_query_count across config rows in this response (bottleneck distinct queries).",
+    )
+    effective_sample_size: int = Field(
+        default=0,
+        ge=0,
+        description="Equals unique_queries_compared for now — distinct-query coverage used for confidence.",
+    )
+    recommended_min_unique_queries_for_valid_comparison: int = Field(
+        default=10,
+        ge=1,
+        description="Minimum distinct queries recommended before treating comparison as statistically reliable.",
     )

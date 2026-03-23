@@ -7,9 +7,11 @@ from openai import APIError as OpenAIAPIError
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from redis.exceptions import RedisError
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models import Dataset
 from app.queue.full_run import enqueue_full_benchmark_run
 from app.schemas.config_comparison import ConfigComparisonResponse
 from app.schemas.dashboard_analytics import DashboardAnalyticsResponse
@@ -49,10 +51,23 @@ router = APIRouter()
     summary="Dashboard aggregates (runs, latency, cost, failures, recent)",
 )
 async def dashboard_summary_endpoint(
+    dataset_id: int | None = Query(
+        None,
+        ge=1,
+        description=(
+            "Scope run-derived aggregates to this dataset (same population as GET /runs?dataset_id= "
+            "via query_cases); includes batch rows tagged benchmark_realism. Omit for global dashboard "
+            "(organic runs only)."
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> DashboardSummaryResponse:
     """Read-only aggregates for UI observability (no run mutation)."""
-    return await get_dashboard_summary(db)
+    if dataset_id is not None:
+        n = await db.scalar(select(func.count()).select_from(Dataset).where(Dataset.id == dataset_id))
+        if not n:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+    return await get_dashboard_summary(db, dataset_id=dataset_id)
 
 
 @router.get(
@@ -61,10 +76,22 @@ async def dashboard_summary_endpoint(
     summary="Dashboard analytics (time series, latency distribution, failures, config insights)",
 )
 async def dashboard_analytics_endpoint(
+    dataset_id: int | None = Query(
+        None,
+        ge=1,
+        description=(
+            "Scope analytics to this dataset (same population as GET /runs?dataset_id=); includes "
+            "benchmark_realism batch rows. Omit for global analytics (organic runs only)."
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> DashboardAnalyticsResponse:
     """Richer analytics layer: time series, latency distribution, failure analysis, config insights."""
-    return await get_dashboard_analytics(db)
+    if dataset_id is not None:
+        n = await db.scalar(select(func.count()).select_from(Dataset).where(Dataset.id == dataset_id))
+        if not n:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+    return await get_dashboard_analytics(db, dataset_id=dataset_id)
 
 
 @router.get("/config-comparison", response_model=ConfigComparisonResponse)

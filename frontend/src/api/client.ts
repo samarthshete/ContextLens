@@ -195,9 +195,21 @@ export const api = {
     return { ...data, httpStatus: res.status }
   },
 
-  dashboardSummary: () => apiFetch<DashboardSummaryResponse>('/runs/dashboard-summary'),
+  dashboardSummary: (params?: { datasetId: number }) => {
+    const q =
+      params != null && params.datasetId != null
+        ? `?dataset_id=${encodeURIComponent(String(params.datasetId))}`
+        : ''
+    return apiFetch<DashboardSummaryResponse>(`/runs/dashboard-summary${q}`)
+  },
 
-  dashboardAnalytics: () => apiFetch<DashboardAnalyticsResponse>('/runs/dashboard-analytics'),
+  dashboardAnalytics: (params?: { datasetId: number }) => {
+    const q =
+      params != null && params.datasetId != null
+        ? `?dataset_id=${encodeURIComponent(String(params.datasetId))}`
+        : ''
+    return apiFetch<DashboardAnalyticsResponse>(`/runs/dashboard-analytics${q}`)
+  },
 
   listRuns: (params?: ListRunsParams) => {
     const sp = new URLSearchParams()
@@ -226,6 +238,8 @@ export const api = {
     options?: {
       evaluatorType?: 'heuristic' | 'llm' | 'both'
       combineEvaluators?: boolean
+      /** When set, matches dashboard ``dataset_id`` scope (includes benchmark_realism runs for that dataset). */
+      datasetId?: number | null
     },
   ) => {
     const sp = new URLSearchParams()
@@ -235,6 +249,9 @@ export const api = {
     sp.set('evaluator_type', options?.evaluatorType ?? 'both')
     if (options?.combineEvaluators) {
       sp.set('combine_evaluators', 'true')
+    }
+    if (options?.datasetId != null) {
+      sp.set('dataset_id', String(options.datasetId))
     }
     return apiFetch<ConfigComparisonResponse>(`/runs/config-comparison?${sp.toString()}`)
   },

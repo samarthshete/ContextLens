@@ -51,6 +51,8 @@ vi.mock('../api/client', async (importOriginal) => {
       })),
       dashboardSummary: vi.fn().mockResolvedValue({
         total_runs: 0,
+        repeated_sampling_note:
+          '0 runs across 0 unique queries (repeated sampling; results are directional, not broad generalization)',
         scale: {
           benchmark_datasets: 0,
           total_queries: 0,
@@ -68,7 +70,9 @@ vi.mock('../api/client', async (importOriginal) => {
           avg_generation_latency_ms: null,
           avg_evaluation_latency_ms: null,
           avg_total_latency_ms: null,
+          total_latency_p50_ms: null,
           end_to_end_run_latency_avg_sec: null,
+          end_to_end_run_latency_p50_sec: null,
           end_to_end_run_latency_p95_sec: null,
         },
         cost: {
@@ -82,6 +86,7 @@ vi.mock('../api/client', async (importOriginal) => {
           full_rag_runs_with_measured_cost: 0,
         },
         failure_type_counts: {},
+        model_failures: 0,
         recent_runs: [],
       }),
       dashboardAnalytics: vi.fn().mockResolvedValue({
@@ -125,6 +130,9 @@ vi.mock('../api/client', async (importOriginal) => {
         comparison_statistically_reliable: false,
         min_traced_runs_across_configs: 0,
         recommended_min_traced_runs_for_valid_comparison: 20,
+        unique_queries_compared: 0,
+        effective_sample_size: 0,
+        recommended_min_unique_queries_for_valid_comparison: 10,
       }),
     },
   }

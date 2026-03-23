@@ -1216,7 +1216,10 @@ export function BenchmarkWorkspace({ routeView }: { routeView: View }) {
                 {compareResult.score_comparison_buckets?.heuristic ? (
                   <div className="cl-card">
                     <h3 className="cl-h3-muted">Heuristic — best vs worst (avg scores)</h3>
-                    <ScoreComparisonDl summary={compareResult.score_comparison_buckets.heuristic} />
+                    <ScoreComparisonDl
+                      summary={compareResult.score_comparison_buckets.heuristic}
+                      metricsRows={compareResult.buckets.heuristic ?? []}
+                    />
                   </div>
                 ) : null}
               </div>
@@ -1236,7 +1239,10 @@ export function BenchmarkWorkspace({ routeView }: { routeView: View }) {
               {compareResult.score_comparison ? (
                 <div className="cl-card">
                   <h3 className="cl-h3-muted">Combined — best vs worst (avg scores)</h3>
-                  <ScoreComparisonDl summary={compareResult.score_comparison} />
+                  <ScoreComparisonDl
+                    summary={compareResult.score_comparison}
+                    metricsRows={compareResult.configs}
+                  />
                 </div>
               ) : null}
             </div>
@@ -1249,6 +1255,8 @@ export function BenchmarkWorkspace({ routeView }: { routeView: View }) {
       {view === 'dashboard' && (
         <DashboardPanel
           pipelineConfigIds={dashboardCompareIds}
+          datasets={datasets}
+          registryLoading={registryLoading}
           onOpenRunDetail={(id) => {
             clearMessages()
             setRegistryNotice(null)

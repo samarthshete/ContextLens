@@ -113,6 +113,8 @@ export interface ConfigScoreComparisonSummary {
 export interface ConfigComparisonMetrics {
   pipeline_config_id: number
   traced_runs: number
+  /** Distinct query_case_id count for this config row (same bucket as traced_runs). */
+  unique_query_count?: number
   avg_faithfulness: number | null
   avg_retrieval_latency_ms: number | null
   p95_retrieval_latency_ms: number | null
@@ -148,6 +150,11 @@ export interface ConfigComparisonResponse {
   comparison_statistically_reliable?: boolean
   min_traced_runs_across_configs?: number
   recommended_min_traced_runs_for_valid_comparison?: number
+  /** Min distinct queries across compared configs (bottleneck for effective sample size). */
+  unique_queries_compared?: number
+  /** Same as unique_queries_compared until a richer definition is needed. */
+  effective_sample_size?: number
+  recommended_min_unique_queries_for_valid_comparison?: number
 }
 
 /** ``GET /runs/dashboard-summary`` — observability aggregates. */
@@ -182,8 +189,12 @@ export interface DashboardLatencySummary {
   avg_generation_latency_ms: number | null
   avg_evaluation_latency_ms: number | null
   avg_total_latency_ms: number | null
+  /** P50 of persisted `total_latency_ms` (`percentile_cont`); null if no samples. */
+  total_latency_p50_ms: number | null
   /** Mean of persisted `total_latency_ms` / 1000; null if no non-null totals. */
   end_to_end_run_latency_avg_sec: number | null
+  /** P50 of `total_latency_ms` / 1000; null if no samples. */
+  end_to_end_run_latency_p50_sec: number | null
   /** P95 of `total_latency_ms` / 1000 (`percentile_cont`); null if no samples. */
   end_to_end_run_latency_p95_sec: number | null
 }
@@ -214,12 +225,16 @@ export interface DashboardRecentRun {
 
 export interface DashboardSummaryResponse {
   total_runs: number
+  /** Repeated sampling vs unique query cases (dashboard honesty). */
+  repeated_sampling_note: string
   scale: DashboardScaleMetrics
   status_counts: DashboardStatusCounts
   evaluator_counts: DashboardEvaluatorCounts
   latency: DashboardLatencySummary
   cost: DashboardCostSummary
   failure_type_counts: Record<string, number>
+  /** Evaluation rows (organic runs) with failure_type set and not NO_FAILURE. */
+  model_failures: number
   recent_runs: DashboardRecentRun[]
 }
 

@@ -6,6 +6,12 @@ Measure how chunk size and top-k jointly affect retrieval quality, context cover
 
 All numbers are measured from stored PostgreSQL run traces — no synthetic or estimated metrics.
 
+**Dashboard note:** Histograms of `failure_type` in the UI count **evaluation** labels (e.g. `RETRIEVAL_PARTIAL`), not the same thing as run `status` **failed** (system/pipeline failures).
+
+**Latency:** Numbers below are from a **local** run batch. Cold-start and cache-warm effects can dominate early runs; averages are **not** a clean performance benchmark. Prefer directional comparison (e.g. config A vs B on the same machine) over treating any “low ms” row as a score. In the app, the latency distribution panel shows a **skew warning**, a **median vs average** note, per-phase **insufficient-sample** copy when **&lt;5** timed runs exist for that phase, and **low-sample** / **high-variance** badges when thresholds apply — the same caveats apply to this document’s tables.
+
+**Comparison reliability:** This experiment used 8 queries × 2 seed passes per config (16 traced runs per config). The `effective_sample_size` = 8 (unique queries), which places this in the MEDIUM confidence tier. Score deltas should be treated as directional indicators, not conclusive rankings.
+
 ---
 
 ## Setup
@@ -35,6 +41,8 @@ Each config uses a scoped document ingestion (independent chunking per config) t
 ---
 
 ## Measured Results
+
+Latency rows are **illustrative** (single-machine, cold-start sensitive), not claims of production speed.
 
 | Metric | A: small (380/k3) | B: medium (720/k5) | C: large (1200/k7) |
 |--------|-------------------|---------------------|---------------------|

@@ -98,6 +98,41 @@ export function sortedFailureCounts(counts: Record<string, number>): [string, nu
   return Object.entries(counts).sort((a, b) => b[1] - a[1])
 }
 
+/** Best-effort parse of top_k from registry names like `stress_topk8` or `top_k 5`. */
+export function inferTopKFromConfigName(name: string): number | null {
+  const m =
+    name.match(/topk[_\s-]*(\d+)/i) ??
+    name.match(/top_k[:\s]*(\d+)/i) ??
+    name.match(/[_-]k(\d+)(?:\b|_|$)/i)
+  if (!m) return null
+  const n = parseInt(m[1], 10)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
+ * When configs sortable by inferred top_k show higher top_k faster (lower latency) but worse relevance,
+ * surface a deterministic tradeoff line (heuristic bucket only; names must encode top_k).
+ */
+export function computeTopKSpeedRelevanceTradeoffNote(rows: ConfigInsight[]): string | null {
+  const scored = rows
+    .map((r) => ({ r, k: inferTopKFromConfigName(r.pipeline_config_name) }))
+    .filter((x): x is { r: ConfigInsight; k: number } => x.k != null && x.r.traced_runs > 0)
+  if (scored.length < 2) return null
+  scored.sort((a, b) => a.k - b.k)
+  const low = scored[0]!
+  const high = scored[scored.length - 1]!
+  if (low.k >= high.k) return null
+  const lLat = low.r.avg_total_latency_ms
+  const hLat = high.r.avg_total_latency_ms
+  const lRel = low.r.avg_retrieval_relevance
+  const hRel = high.r.avg_retrieval_relevance
+  if (lLat == null || hLat == null || lRel == null || hRel == null) return null
+  if (hLat < lLat && hRel < lRel) {
+    return 'Tradeoff: higher top_k improves speed here but reduces retrieval relevance and slightly worsens the failure mix.'
+  }
+  return null
+}
+
 /** Dashboard table: most active configs first (stable tie-break by id). */
 export function sortConfigInsightsByTracedDesc(rows: ConfigInsight[]): ConfigInsight[] {
   return [...rows].sort(

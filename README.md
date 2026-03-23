@@ -30,7 +30,7 @@ ContextLens captures a **complete, structured trace** for every benchmark run an
 | **Evaluation** | Heuristic scoring (fast, offline) or LLM-as-judge (faithfulness, completeness, groundedness) |
 | **Diagnosis** | Deterministic, explainable failure summaries — no extra LLM calls |
 | **Comparison** | Side-by-side run diff and aggregate config comparison across benchmark datasets |
-| **Observability** | Dashboard with time series trends, latency distributions, failure breakdowns, and config insights |
+| **Observability** | Dashboard with time series trends, latency distributions, failure breakdowns, config insights, and comparison reliability gating |
 
 ---
 
@@ -55,10 +55,31 @@ ContextLens captures a **complete, structured trace** for every benchmark run an
 - **Queue browser** (`/queue`) — merged view of pending/running/failed runs with on-demand queue-status inspection and one-click requeue for eligible full runs
 
 ### Dashboard
-- **90-day trend chart** — daily run counts stacked by status (completed / failed / other)
-- **Latency distribution** — min, avg, median, p95, max per pipeline phase
-- **Failure breakdown** — overall failure counts and per-config breakdown with recent failed runs
-- **Config insights** — per-pipeline aggregate scores, cost, top failure type, attention flags for failure-prone configs
+- **Dataset-scoped analytics** — Summary and analytics default to the **latest benchmark dataset** (by `created_at`) in the UI; you can switch datasets with the selector. APIs: `GET /api/v1/runs/dashboard-summary?dataset_id=` and `GET /api/v1/runs/dashboard-analytics?dataset_id=` (optional; when omitted, run-derived metrics use all organic runs). Unknown `dataset_id` → **404**. Corpus counters (`documents processed`, `chunks indexed`) stay **global**; everything else that comes from `runs` / evaluations respects the selected dataset.
+- **Run counts** — **System failures** = runs whose `status` is `failed` (pipeline errors / retries). **Model failures** = evaluation rows with `failure_type` other than `NO_FAILURE` (e.g. `RETRIEVAL_PARTIAL`, `ANSWER_INCOMPLETE`); a run can be `completed` and still count here.
+- **90-day trend chart** — daily run volume stacked by `status` (completed / system-failed / other)
+- **Latency** — Summary card lists **median (P50) → P95 → mean** (mean de-emphasized) for retrieval and end-to-end total; API exposes `total_latency_p50_ms` / `end_to_end_run_latency_p50_sec` alongside existing mean/P95. Copy explains cold-start skew (median more representative than average).
+- **Latency distribution** — Per phase: **&lt;5** non-null samples → only *“Insufficient samples for distribution (N runs)”* (no percentile table for that phase). **≥5** → bars + table (median before P95 before mean). Section **skew warning** + median-vs-average note. Phases with **≥5** but **&lt;20** samples get a **Low sample — not reliable** badge; **P95/median &gt; 10** → **High variance (skewed distribution)** badge.
+- **Failure breakdown** — evaluation `failure_type` histograms (excluding `NO_FAILURE`); **recent system-failed runs** = `status` failed only
+- **Config insights** — per-pipeline scores, cost, and top evaluation failure label; **heuristic** vs **LLM** tables stay separate. **LLM gating:** `llm_runs` **&lt; 3** → sparse warning only (hides LLM cost block, LLM compare bucket, LLM config-insights table); **3–9** → illustrative “limited evidence” copy where applicable. Tradeoff note: lower `top_k` tends to improve retrieval precision; higher `top_k` improves context coverage but adds noise.
+- **Config comparison reliability** — `comparison_confidence` (LOW / MEDIUM / HIGH) based on `effective_sample_size = min(unique queries across compared configs)`; thresholds <8 → LOW, <15 → MEDIUM, ≥15 → HIGH. A `repeated_sampling_note` is surfaced when the same queries were run multiple times. `comparison_statistically_reliable: false` unless ≥10 unique queries per config. These gates appear as banners in the comparison panel — not buried in JSON.
+
+## Benchmark Reality and Limitations
+
+- Current benchmark: **49 runs across 6 unique queries (repeated sampling)**
+- Effective sample size: **6 queries**
+- Config comparison confidence: **LOW (directional only)**
+- Dominant failure mode: **retrieval-related (e.g. RETRIEVAL_PARTIAL)**
+### LLM Evaluation Insight
+
+LLM-based evaluation demonstrates both:
+- **Correct grounded responses** when relevant context is retrieved
+- **Retrieval-miss failures**, where the model correctly abstains when context is insufficient
+
+Due to limited sample size, these results are used for qualitative validation rather than statistical conclusions.
+- Latency: **highly skewed due to local execution and cold-start effects; median more reliable than average**
+
+This system is designed to surface failure patterns and tradeoffs, not to claim production-grade performance metrics.
 
 ### Infrastructure
 - **Durable full-mode pipeline** — full RAG runs (generation + LLM judge) enqueued via Redis + RQ; survive API restarts; stale-lock reconciliation; one-click requeue
@@ -79,7 +100,7 @@ ContextLens captures a **complete, structured trace** for every benchmark run an
 ┌─────────────────────▼───────────────────────────────────────┐
 │                 FastAPI  (async, Python)                     │
 │  POST /runs        GET /runs         GET /runs/:id           │
-│  GET /runs/dashboard-summary   GET /runs/dashboard-analytics │
+│  GET /runs/dashboard-summary?dataset_id=   GET /runs/dashboard-analytics?dataset_id= │
 │  GET /queue-status   POST /requeue   GET /config-comparison  │
 │  Registry CRUD — datasets, query cases, pipeline configs       │
 └──────┬──────────────────┬───────────────────────┬───────────┘
@@ -136,8 +157,8 @@ Query × Config → Retrieve → LLM Generate → LLM Judge → Trace stored →
 - **Anthropic** (optional) — set `LLM_PROVIDER=anthropic` and `CLAUDE_API_KEY`
 
 ### Testing
-- **pytest** — 203 backend tests; deterministic fake embeddings in `conftest.py` for fully offline CI
-- **Vitest + React Testing Library** — 200 frontend unit/integration tests
+- **pytest** — 215 backend tests; deterministic fake embeddings in `conftest.py` for fully offline CI
+- **Vitest + React Testing Library** — 227 frontend unit/integration tests
 - **Playwright** — 14 E2E tests using `page.route()` API mocking; no backend required to run
 
 ---
@@ -240,39 +261,39 @@ uvicorn app.main:app --reload --port 8002
 
 ### 1. Run Workflow Entry
 
-The benchmark entry point: pick a dataset, query case, and pipeline config. Document upload and corpus scope are handled in the same panel.
+Dataset selector, query case, pipeline config, corpus scope, document upload, and eval mode — the complete benchmark entry point in one panel.
 
 ![Run workflow entry](docs/images/run-workflow.png)
 
 ---
 
-### 2. Dashboard Overview
+### 2. Run Detail — Phase Timeline & Diagnosis
 
-90-day run trends, per-phase latency distributions, failure type breakdown, and per-config insights — all from a single parallel API fetch.
+Phase timeline with proportional bars, dominant-phase callout (retrieval: 99.9% of 1.3 s here), and a one-line run diagnosis summary. Evaluator, status, and export JSON all in a single view.
 
-![Dashboard overview](docs/images/dashboard-overview.png)
-
----
-
-### 3. Run Diagnosis — Hero View
-
-The core debugging surface: phase timeline with proportional bars and dominant-phase callout, diagnosis summary with failure type and supporting evidence, and retrieval inspection with source labels.
-
-![Run diagnosis hero](docs/images/run-diagnosis-hero.png)
+![Run diagnosis](docs/images/run-diagnosis.png)
 
 ---
 
-### 4. Retrieval Source Inspection
+### 3. Retrieval Source Inspection
 
-Every retrieved chunk shows its rank, cosine similarity score, source document label, and text preview. A diversity note flags when all hits originate from the same document.
+Every retrieved chunk shows its rank, cosine similarity score, source document label (linked to `/documents/:id`), and text preview. A diversity note surfaces when all hits originate from the same document.
 
-![Retrieval source inspection](docs/images/retrieval-source-inspection.png)
+![Retrieval hits with source labels](docs/images/run-retrieval-hits.png)
+
+---
+
+### 4. LLM Evaluation Scores
+
+Full-RAG run with gpt-4o-mini: faithfulness, completeness, retrieval relevance, context coverage, and groundedness all at 1.000 — `NO_FAILURE` — with measured cost ($0.000169) and parse/retry metadata.
+
+![LLM evaluation scores](docs/images/run-llm-scores.png)
 
 ---
 
 ### 5. Run Diff
 
-Enter any second run ID to get a side-by-side comparison across retrieval, context, generation, cost, and evaluation metrics — each row labeled `improved`, `worse`, or `same`.
+Side-by-side comparison of two runs — LLM (NO_FAILURE, all scores 1.0) vs heuristic (ANSWER_INCOMPLETE). Each metric row is labeled `same`, `worse`, or `improved`. Useful for measuring pipeline config impact on identical queries.
 
 ![Run diff](docs/images/run-diff.png)
 
@@ -280,17 +301,41 @@ Enter any second run ID to get a side-by-side comparison across retrieval, conte
 
 ### 6. Runs List with Filters
 
-Server-side filters (status, evaluator type, dataset, pipeline config) combined with labeled client-side row narrowing. Every row links directly to the run detail view.
+Server-side filters (status, evaluator type, dataset, pipeline config) plus labeled client-side row narrowing on the loaded page. 173 total runs shown; every row opens the run detail view directly.
 
-![Runs list with filters](docs/images/runs-filters.png)
+![Runs list with filters](docs/images/runs-list.png)
 
 ---
 
-### 7. Test Suite
+### 7. Dashboard — Scale & Run Counts
 
-203 backend pytest tests, 200 frontend Vitest tests, 14 Playwright E2E tests — all green. Backend tests run fully offline using deterministic fake embeddings. E2E tests use `page.route()` API mocking with no backend dependency.
+Observable dataset scope: 49 total runs, 6 unique queries, 2 configs, LLM eval rows = 1 (sparse — not reliable). System failures vs model failures distinguished. `repeated_sampling_note` visible.
 
-![Test suite](docs/images/test-suite.png)
+![Dashboard overview](docs/images/dashboard-overview.png)
+
+---
+
+### 8. Dashboard — Latency Distribution
+
+Per-phase latency with skew warning banner, median-before-P95-before-mean ordering, and sparse-LLM gate. Cold-start caveat is explicit: these numbers are directional, not SLA measurements.
+
+![Dashboard latency](docs/images/dashboard-latency.png)
+
+---
+
+### 9. Dashboard — Failure Breakdown
+
+`failure_type` histograms from evaluation rows (not run status). `RETRIEVAL_PARTIAL` dominates at 28 of 34 failures. Per-config breakdown shows which pipeline contributes each failure type.
+
+![Dashboard failure breakdown](docs/images/dashboard-failures.png)
+
+---
+
+### 10. Dashboard — Config Comparison
+
+Effective sample size: 6 unique queries → `comparison_confidence: LOW`. Reliability gate banner shown. Heuristic bucket scores visible; LLM bucket flagged sparse (1 run — not reliable).
+
+![Dashboard config comparison](docs/images/dashboard-config-comparison.png)
 
 ---
 
@@ -306,7 +351,7 @@ Server-side filters (status, evaluator type, dataset, pipeline config) combined 
 | One config tested | Benchmark across configs; aggregate comparison with per-evaluator bucketing |
 | No operational visibility | Dashboard: 90-day trends, p95 latencies, per-config failure rates |
 | Evaluation = "looks right" | Dual-mode scoring with N/A vs zero semantics; no blended averages across evaluator types |
-| No test infrastructure | 417 automated tests across three layers with offline-capable fixtures |
+| No test infrastructure | 456 automated tests across three layers (215 backend + 227 frontend + 14 E2E) with offline-capable fixtures |
 
 The diagnosis layer is intentionally client-side: deterministic TypeScript logic over the existing run trace. No additional LLM calls, no new API contracts, fully testable in isolation.
 
@@ -314,23 +359,23 @@ The diagnosis layer is intentionally client-side: deterministic TypeScript logic
 
 ## Testing and Quality
 
-### Backend — 203 pytest tests
+### Backend — 215 pytest tests
 
 ```bash
 cd backend && pytest
 ```
 
-Covers: document ingestion, retrieval, full RAG pipeline, heuristic + LLM judge evaluation, failure taxonomy normalization, run lifecycle, requeue, queue-status, dashboard summary, dashboard analytics, config comparison, registry CRUD, cost estimation, stale-lock reconciliation, and LLM judge parse retry with golden fixtures.
+Covers: document ingestion, retrieval, full RAG pipeline, heuristic + LLM judge evaluation, failure taxonomy normalization, run lifecycle, requeue, queue-status, dashboard summary, dashboard analytics, config comparison (confidence tiers, effective sample size), registry CRUD, cost estimation, stale-lock reconciliation, and LLM judge parse retry with golden fixtures.
 
 **Runs fully offline.** `backend/tests/conftest.py` replaces the `sentence-transformers` model with deterministic 384-dim L2-normalized fake vectors — no model download required for CI.
 
-### Frontend — 200 Vitest tests
+### Frontend — 227 Vitest tests
 
 ```bash
 cd frontend && npm run test
 ```
 
-Covers: run diagnosis heuristics (`runDiagnosis.ts`), run diff (`runDiff.ts`), phase timeline (`runTimeline.ts`), retrieval source formatting (`retrievalSourceFormat.ts`), dashboard analytics format helpers (`dashboardAnalyticsFormat.ts`), runs list query logic (`runsListQuery.ts`), queue browser load (`queueBrowserLoad.ts`), all panel components via RTL, and all route paths via the router.
+Covers: run diagnosis heuristics (`runDiagnosis.ts`), run diff (`runDiff.ts`), phase timeline (`runTimeline.ts`), retrieval source formatting (`retrievalSourceFormat.ts`), dashboard analytics format helpers (`dashboardAnalyticsFormat.ts`), runs list query logic (`runsListQuery.ts`), queue browser load (`queueBrowserLoad.ts`), all panel components via RTL (including latency skew warning, high-variance badge, low-sample badge, comparison reliability banner, repeated-sampling note), and all route paths via the router.
 
 ### E2E — 14 Playwright tests
 
@@ -363,7 +408,7 @@ Tests span `e2e/run-detail.spec.ts` (11), `e2e/runs-list.spec.ts` (1), `e2e/queu
 |----------|----------|
 | [`docs/architecture.md`](docs/architecture.md) | System layout, data model, API surface, tech stack |
 | [`docs/decisions.md`](docs/decisions.md) | Design rationale and architectural constraints |
-| [`docs/benchmark-results.md`](docs/benchmark-results.md) | Measured benchmark: chunk size × top-k tradeoffs across 48 runs |
+| [`docs/benchmark-results.md`](docs/benchmark-results.md) | Measured benchmark: chunk size × top-k tradeoffs across 48 runs (heuristic-only; all metrics from stored DB traces) |
 | [`docs/deployment.md`](docs/deployment.md) | Vercel + Render deployment runbook |
 
 ---

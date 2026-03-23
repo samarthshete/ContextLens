@@ -62,6 +62,34 @@ Dashboard cost metrics use per-run subqueries (`SUM(cost_usd) GROUP BY run_id`) 
 
 `GET /runs/dashboard-summary`, `GET /runs/dashboard-analytics`, `GET /runs/config-comparison`, and generated metrics from `aggregate.py` exclude runs tagged with `benchmark_realism` in `runs.metadata_json` (batch stress / realism experiments). The run list and run detail endpoints still return every stored run.
 
+**System vs model failures:** `status_counts.failed` reflects run **status** (pipeline did not complete). `model_failures` on the same summary counts **evaluation** rows (organic scope) whose `failure_type` is set and not `NO_FAILURE`. UI copy distinguishes these. **Latency** panels emphasize P50/P95 over the mean and state directional / cold-start caveats; dashboard-summary exposes **`total_latency_p50_ms`** / **`end_to_end_run_latency_p50_sec`**. **LLM dashboard UI:** `llm_runs` **&lt; 3** → hide LLM cost, LLM compare bucket, and LLM config-insights table (sparse warning only); **3–9** → illustrative limited-evidence copy; **`repeated_sampling_note`** on summary is shown under run-count stats.
+
 ## Config Comparison
 
-Cross-config score comparison (`best_config_*`, `worst_config_*`, `delta_pct`) is computed within a single evaluator bucket. Heuristic and LLM buckets are not merged in the API. Optional query params `dataset_id`, `min_traced_runs`, and `strict_comparison` enforce comparable samples (same dataset slice, minimum runs per config, identical query-case coverage when strict). Rows expose `stddev_samp_*` for key scores where measurable (PostgreSQL `STDDEV_SAMP`; null when n&lt;2).
+Cross-config score comparison (`best_config_*`, `worst_config_*`, `delta_pct`) is computed within a single evaluator bucket. Heuristic and LLM buckets are not merged in the API. **`traced_runs`** and **`unique_query_count`** use a **`run_base`** slice (scoped runs with ≥1 **`retrieval_results`** row), not “only rows with an evaluation in this bucket,” so run volume matches dashboard-style “has retrieval” scope; score aggregates still require eval rows in the bucket. Optional query params `dataset_id`, `min_traced_runs`, and `strict_comparison` enforce comparable samples. Rows expose `stddev_samp_*` for key scores where measurable (PostgreSQL `STDDEV_SAMP`; null when n&lt;2).
+
+### Effective Sample Size and Confidence Tiers
+
+`effective_sample_size` = `min(unique_query_count across all compared configs)`, **not** raw traced run count. When the same 6 queries are each run 4× across 2 configs, traced runs = 24 but effective_sample_size = 6. Confidence is based on this smaller number:
+
+| effective_sample_size | comparison_confidence |
+|-----------------------|-----------------------|
+| < 8                   | LOW                   |
+| 8–14                  | MEDIUM                |
+| ≥ 15                  | HIGH                  |
+
+`comparison_statistically_reliable` = `true` only when `effective_sample_size ≥ 10`. These fields are always returned in the API response and surfaced as banners in the comparison panel — treat score deltas as directional when confidence is LOW or MEDIUM.
+
+### Repeated Sampling Note
+
+When total traced runs > unique queries across compared configs, the API returns a `repeated_sampling_note` (e.g. "53 runs across 6 unique queries (repeated sampling; results are directional, not broad generalization)"). The UI surfaces this note above comparison results so readers understand the query-reuse pattern.
+
+## Latency Honesty
+
+All latency figures in the dashboard and benchmark results are from **local runs** and are **directional only**. Cold-start, OS scheduler jitter, and model-cache warm-up can dominate early runs and inflate averages significantly. The UI:
+
+- **Summary latency card:** order **median (P50) → P95 → mean** (mean visually de-emphasized); end-to-end includes **`total_latency_p50_ms`** / **`end_to_end_run_latency_p50_sec`** from the same population as total mean/P95.
+- **Latency distribution panel:** **skew warning** (`role="alert"`) + fixed **median vs average** sentence when any phase has samples; per phase with **&lt;5** non-null timings → only *Insufficient samples for distribution (N runs)* (no percentile table/bars for that phase); **≥5** → bars + table with median before P95 before mean.
+- **Badges** (when phase `count > 0`): **Low sample — not reliable** if count **&lt; 20**; **High variance (skewed distribution)** if **P95/median > 10** (constants in `frontend/src/benchmark/dashboardConstants.ts`).
+
+Do not quote any latency number from a local run as a production-grade performance claim or SLA.

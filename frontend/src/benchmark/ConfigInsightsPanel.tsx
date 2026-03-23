@@ -3,11 +3,13 @@ import type { ConfigInsight } from '../api/types'
 import { formatLatencyMs, formatUsd } from './dashboardFormat'
 import {
   computeConfigInsightBadgeWinners,
+  computeTopKSpeedRelevanceTradeoffNote,
   configInsightRowClasses,
   formatInsightTimestamp,
   formatScore,
   sortConfigInsightsByTracedDesc,
 } from './dashboardAnalyticsFormat'
+import { DASHBOARD_LLM_EVIDENCE_MIN_RUNS, DASHBOARD_LLM_SPARSE_GATE_RUNS } from './dashboardConstants'
 
 function nameForId(rows: ConfigInsight[], id: number | null): string | null {
   if (id == null) return null
@@ -25,12 +27,18 @@ function InsightBadge({ label, name }: { label: string; name: string | null }) {
   )
 }
 
+const CONFIG_TRADEOFF_NOTE =
+  'For config tradeoffs, lean on retrieval relevance and evaluation failure-type mix; completeness often moves slowly on a fixed dataset. Higher top_k can add coverage but sometimes dilutes relevance.'
+
 export function ConfigInsightsBucketSection({
   heuristic,
   llm,
+  llmEvalRunCount,
 }: {
   heuristic: ConfigInsight[]
   llm: ConfigInsight[]
+  /** Distinct runs with an LLM-bucket evaluation (from dashboard summary). */
+  llmEvalRunCount: number
 }) {
   const bothEmpty = heuristic.length === 0 && llm.length === 0
 
@@ -46,6 +54,9 @@ export function ConfigInsightsBucketSection({
           Split by evaluator bucket — <strong>heuristic</strong> vs <strong>LLM judge</strong>. Average
           scores use only runs in that bucket (no mixing).
         </p>
+        <p className="cl-muted cl-config-insights-tradeoff" data-testid="config-insights-tradeoff">
+          {CONFIG_TRADEOFF_NOTE}
+        </p>
         <p className="cl-muted cl-empty-inline">No config insights yet.</p>
       </section>
     )
@@ -60,16 +71,16 @@ export function ConfigInsightsBucketSection({
           averages scores and costs only over runs evaluated in that bucket (
           <code>analytics.config_insights.heuristic</code> / <code>.llm</code>).
         </p>
+        <p className="cl-muted cl-config-insights-tradeoff" data-testid="config-insights-tradeoff">
+          {CONFIG_TRADEOFF_NOTE}
+        </p>
       </div>
-      <ConfigInsightsPanel
-        title="Heuristic evaluation"
-        bucketTestId="config-insights-heuristic"
-        data={heuristic}
-      />
+      <ConfigInsightsPanel title="Heuristic evaluation" bucketTestId="config-insights-heuristic" data={heuristic} />
       <ConfigInsightsPanel
         title="LLM judge evaluation"
         bucketTestId="config-insights-llm"
         data={llm}
+        llmEvalRunCount={llmEvalRunCount}
       />
     </section>
   )
@@ -79,12 +90,24 @@ type ConfigInsightsPanelProps = {
   title: string
   bucketTestId: string
   data: ConfigInsight[]
+  /** Dashboard summary `evaluator_counts.llm_runs`; used for low-LLM-sample warning on the LLM bucket only. */
+  llmEvalRunCount?: number
 }
 
-export function ConfigInsightsPanel({ title, bucketTestId, data }: ConfigInsightsPanelProps) {
+export function ConfigInsightsPanel({
+  title,
+  bucketTestId,
+  data,
+  llmEvalRunCount,
+}: ConfigInsightsPanelProps) {
   const headingId = useId()
   const sorted = useMemo(() => sortConfigInsightsByTracedDesc(data), [data])
   const winners = useMemo(() => computeConfigInsightBadgeWinners(data), [data])
+  const isLlmBucket = bucketTestId === 'config-insights-llm'
+  const llmSparseGate =
+    isLlmBucket && llmEvalRunCount != null && llmEvalRunCount < DASHBOARD_LLM_SPARSE_GATE_RUNS
+  const topKTradeoff =
+    bucketTestId === 'config-insights-heuristic' ? computeTopKSpeedRelevanceTradeoffNote(data) : null
 
   const fastestName = nameForId(data, winners.fastestConfigId)
   const mostUsedName = nameForId(data, winners.mostUsedConfigId)
@@ -98,6 +121,22 @@ export function ConfigInsightsPanel({ title, bucketTestId, data }: ConfigInsight
     highestRelName != null ||
     failProneName != null ||
     (winners.showCheapestBadge && cheapestName != null)
+
+  if (llmSparseGate) {
+    const n = llmEvalRunCount ?? 0
+    return (
+      <section
+        className="cl-card cl-config-insights-bucket-panel"
+        aria-labelledby={headingId}
+        data-testid={bucketTestId}
+      >
+        <h3 id={headingId}>{title}</h3>
+        <p className="cl-msg cl-msg-warn" data-testid="dashboard-llm-insights-sparse-gate" role="alert">
+          ⚠ Sparse sample ({n} run{n === 1 ? '' : 's'}) — not reliable
+        </p>
+      </section>
+    )
+  }
 
   if (data.length === 0) {
     return (
@@ -124,12 +163,26 @@ export function ConfigInsightsPanel({ title, bucketTestId, data }: ConfigInsight
         (sorted by traced runs). Only runs whose evaluation row is in this bucket.
       </p>
 
+      {topKTradeoff ? (
+        <p className="cl-msg cl-msg-info" data-testid="config-insights-topk-tradeoff" role="note">
+          {topKTradeoff}
+        </p>
+      ) : null}
+
+      {isLlmBucket &&
+      llmEvalRunCount != null &&
+      llmEvalRunCount < DASHBOARD_LLM_EVIDENCE_MIN_RUNS ? (
+        <p className="cl-msg cl-msg-info" data-testid="dashboard-llm-evidence-limited" role="note">
+          LLM evidence is limited; treat this as illustrative, not conclusive.
+        </p>
+      ) : null}
+
       {hasBadgeRow ? (
         <div className="cl-config-insight-badges" role="list" aria-label="Config highlights">
           <InsightBadge label="Fastest (avg total latency)" name={fastestName} />
           <InsightBadge label="Most used (traced runs)" name={mostUsedName} />
           <InsightBadge label="Highest relevance" name={highestRelName} />
-          <InsightBadge label="Most failure-prone (failed runs)" name={failProneName} />
+          <InsightBadge label="Most system-failure-prone (run status)" name={failProneName} />
           {winners.showCheapestBadge ? (
             <InsightBadge label="Cheapest (avg cost)" name={cheapestName} />
           ) : null}
@@ -143,7 +196,7 @@ export function ConfigInsightsPanel({ title, bucketTestId, data }: ConfigInsight
               <th>Config</th>
               <th>Traced runs</th>
               <th>Completed</th>
-              <th>Failed</th>
+              <th>System failures</th>
               <th>Avg total latency</th>
               <th>Avg retrieval relevance</th>
               <th>Avg completeness</th>
