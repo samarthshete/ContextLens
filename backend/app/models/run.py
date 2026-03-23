@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -30,6 +31,8 @@ class Run(Base):
     generation_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     evaluation_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    metadata_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

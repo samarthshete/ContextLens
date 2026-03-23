@@ -1,0 +1,26 @@
+[
+  {
+    "query_text": "What Redis maxmemory policies evict keys from the entire keyspace using least recently used?",
+    "expected_answer": "allkeys-lru evicts LRU keys from the full keyspace when memory is full."
+  },
+  {
+    "query_text": "How do I configure Istio VirtualService weighted routing for a canary release with 10% traffic?",
+    "expected_answer": "Use two HTTP routes with weights 90 and 10 pointing at stable and canary subsets."
+  },
+  {
+    "query_text": "What happens to write commands when Redis uses noeviction and memory is full?",
+    "expected_answer": "Writes return errors while reads may still succeed."
+  },
+  {
+    "query_text": "List the main PostgreSQL VACUUM tuning parameters and their default values.",
+    "expected_answer": "autovacuum_vacuum_scale_factor defaults to 0.2; autovacuum_analyze_scale_factor defaults to 0.1."
+  },
+  {
+    "query_text": "What is the difference between volatile-lru and allkeys-lru in Redis eviction?",
+    "expected_answer": "volatile-lru only evicts keys that have an expire set; allkeys-lru can evict any key."
+  },
+  {
+    "query_text": "Explain gRPC deadline propagation across service mesh sidecars.",
+    "expected_answer": "Deadlines are carried in grpc-timeout headers and enforced by proxies along the path."
+  }
+]

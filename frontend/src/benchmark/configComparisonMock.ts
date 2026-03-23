@@ -26,6 +26,10 @@ export function emptyConfigComparisonBoth(
       heuristic: nullScoreSummary(),
       llm: nullScoreSummary(),
     },
+    comparison_confidence: 'LOW',
+    comparison_statistically_reliable: false,
+    min_traced_runs_across_configs: 0,
+    recommended_min_traced_runs_for_valid_comparison: 20,
     ...over,
   }
 }

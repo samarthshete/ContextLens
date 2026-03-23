@@ -232,5 +232,5 @@ export const EMPTY_DASHBOARD_ANALYTICS = {
     by_config: [],
     recent_failed_runs: [],
   },
-  config_insights: [],
+  config_insights: { heuristic: [], llm: [] },
 }

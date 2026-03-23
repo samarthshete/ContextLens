@@ -1,0 +1,5 @@
+{
+  "name": "evidence-stress-v1",
+  "description": "Narrow Redis memory/eviction corpus with off-topic and adversarial queries to stress retrieval and heuristic completeness.",
+  "corpus_files": ["corpus/redis-memory-eviction.md"]
+}

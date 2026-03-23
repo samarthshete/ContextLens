@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
+from typing import Any, Literal
 
-from sqlalchemy import case, func, select, text
+from sqlalchemy import func, not_, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
+from app.domain.analytics_run_scope import SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM
 from app.models import EvaluationResult, PipelineConfig, Run
 from app.services.phase_latency_distribution import get_phase_latency_distribution
 from app.schemas.dashboard_analytics import (
     ConfigInsight,
+    ConfigInsightsByEvaluatorBucket,
     DashboardAnalyticsResponse,
     FailureAnalysisSection,
     FailureByConfig,
@@ -34,12 +37,13 @@ async def _time_series(session: AsyncSession) -> list[TimeSeriesDay]:
     # Subquery: failure count per run (runs with a non-empty, non-NO_FAILURE failure_type)
     failure_sub = (
         select(EvaluationResult.run_id)
+        .join(Run, Run.id == EvaluationResult.run_id)
         .where(
             EvaluationResult.failure_type.isnot(None),
             EvaluationResult.failure_type != "",
             EvaluationResult.failure_type != "NO_FAILURE",
+            text(SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM),
         )
-        .correlate(Run)
     )
 
     # Per-run cost: SUM(cost_usd) grouped by run_id, so that if the schema
@@ -51,7 +55,11 @@ async def _time_series(session: AsyncSession) -> list[TimeSeriesDay]:
             EvaluationResult.run_id.label("run_id"),
             func.sum(EvaluationResult.cost_usd).label("run_cost"),
         )
-        .where(EvaluationResult.cost_usd.isnot(None))
+        .join(Run, Run.id == EvaluationResult.run_id)
+        .where(
+            EvaluationResult.cost_usd.isnot(None),
+            text(SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM),
+        )
         .group_by(EvaluationResult.run_id)
     ).subquery("run_cost")
 
@@ -71,7 +79,9 @@ async def _time_series(session: AsyncSession) -> list[TimeSeriesDay]:
             func.avg(run_cost_sq.c.run_cost).label("avg_cost_usd"),
             func.count(Run.id).filter(Run.id.in_(failure_sub)).label("failure_count"),
         )
+        .select_from(Run)
         .outerjoin(run_cost_sq, run_cost_sq.c.run_id == Run.id)
+        .where(text(SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM))
         .group_by(date_col)
         .order_by(date_col.desc())
         .limit(90)
@@ -94,11 +104,12 @@ async def _time_series(session: AsyncSession) -> list[TimeSeriesDay]:
 async def _latency_distribution(session: AsyncSession) -> LatencyDistributionSection:
     """Min/max/avg/median/p95 for each latency phase (shared SQL via ``phase_latency_distribution``)."""
 
+    excl = {"exclude_benchmark_realism_runs": True}
     return LatencyDistributionSection(
-        retrieval=await get_phase_latency_distribution(session, Run.retrieval_latency_ms),
-        generation=await get_phase_latency_distribution(session, Run.generation_latency_ms),
-        evaluation=await get_phase_latency_distribution(session, Run.evaluation_latency_ms),
-        total=await get_phase_latency_distribution(session, Run.total_latency_ms),
+        retrieval=await get_phase_latency_distribution(session, Run.retrieval_latency_ms, **excl),
+        generation=await get_phase_latency_distribution(session, Run.generation_latency_ms, **excl),
+        evaluation=await get_phase_latency_distribution(session, Run.evaluation_latency_ms, **excl),
+        total=await get_phase_latency_distribution(session, Run.total_latency_ms, **excl),
     )
 
 
@@ -109,10 +120,12 @@ async def _failure_analysis(session: AsyncSession) -> FailureAnalysisSection:
     fail_rows = (
         await session.execute(
             select(EvaluationResult.failure_type, func.count())
+            .join(Run, Run.id == EvaluationResult.run_id)
             .where(
                 EvaluationResult.failure_type.isnot(None),
                 EvaluationResult.failure_type != "",
                 EvaluationResult.failure_type != "NO_FAILURE",
+                text(SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM),
             )
             .group_by(EvaluationResult.failure_type)
         )
@@ -140,6 +153,7 @@ async def _failure_analysis(session: AsyncSession) -> FailureAnalysisSection:
                 EvaluationResult.failure_type.isnot(None),
                 EvaluationResult.failure_type != "",
                 EvaluationResult.failure_type != "NO_FAILURE",
+                text(SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM),
             )
             .group_by(Run.pipeline_config_id, PipelineConfig.name, EvaluationResult.failure_type)
             .order_by(Run.pipeline_config_id)
@@ -159,7 +173,10 @@ async def _failure_analysis(session: AsyncSession) -> FailureAnalysisSection:
     recent_stmt = (
         select(Run.id, Run.status, Run.created_at, Run.pipeline_config_id, EvaluationResult.failure_type)
         .outerjoin(EvaluationResult, EvaluationResult.run_id == Run.id)
-        .where(Run.status == "failed")
+        .where(
+            Run.status == "failed",
+            text(SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM),
+        )
         .order_by(Run.created_at.desc(), Run.id.desc())
         .limit(10)
     )
@@ -183,24 +200,39 @@ async def _failure_analysis(session: AsyncSession) -> FailureAnalysisSection:
     )
 
 
-async def _config_insights(session: AsyncSession) -> list[ConfigInsight]:
-    """Per-config aggregate metrics with scores and top failure type."""
+def _evaluation_in_llm_bucket(er: Any) -> Any:
+    """Match ``app.domain.evaluator_bucket`` SQL (LLM vs heuristic)."""
+    return or_(
+        er.used_llm_judge.is_(True),
+        er.metadata_json["evaluator_type"].astext == "llm",
+    )
 
-    # Per-run cost subquery: SUM(cost_usd) grouped by run_id so that cost is
-    # aggregated at the run level before being rolled up per config.  This
-    # mirrors the defensive pattern in _time_series and dashboard_summary.py.
+
+async def _config_insights_for_bucket(
+    session: AsyncSession,
+    bucket: Literal["heuristic", "llm"],
+) -> list[ConfigInsight]:
+    """Per-config metrics for traced runs whose evaluation row is in *bucket* only."""
+
+    er = aliased(EvaluationResult, name="er")
+    bucket_pred = _evaluation_in_llm_bucket(er) if bucket == "llm" else not_(_evaluation_in_llm_bucket(er))
+
+    # Per-run cost: only runs in this evaluator bucket (same bucket as score join).
     run_cost_sq = (
         select(
-            EvaluationResult.run_id.label("run_id"),
-            func.sum(EvaluationResult.cost_usd).label("run_cost"),
+            er.run_id.label("run_id"),
+            func.sum(er.cost_usd).label("run_cost"),
         )
-        .where(EvaluationResult.cost_usd.isnot(None))
-        .group_by(EvaluationResult.run_id)
+        .select_from(er)
+        .join(Run, Run.id == er.run_id)
+        .where(
+            er.cost_usd.isnot(None),
+            bucket_pred,
+            text(SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM),
+        )
+        .group_by(er.run_id)
     ).subquery("run_cost")
 
-    # Per-config cost: AVG and SUM of the per-run costs, grouped by config.
-    # Completely independent of the EvaluationResult join used for scores,
-    # so row multiplicity in that join cannot inflate cost metrics.
     config_cost_sq = (
         select(
             Run.pipeline_config_id.label("pc_id"),
@@ -223,46 +255,48 @@ async def _config_insights(session: AsyncSession) -> list[ConfigInsight]:
             ).label("avg_total_latency_ms"),
             func.min(Run.total_latency_ms).label("min_total_latency_ms"),
             func.max(Run.total_latency_ms).label("max_total_latency_ms"),
-            # Cost from pre-aggregated config_cost_sq (one row per config);
-            # MAX extracts the single value within the GROUP BY group.
             func.max(config_cost_sq.c.avg_cost_usd).label("avg_cost_usd"),
             func.max(config_cost_sq.c.total_cost_usd).label("total_cost_usd"),
-            func.avg(EvaluationResult.retrieval_relevance).filter(
-                EvaluationResult.retrieval_relevance.isnot(None)
-            ).label("avg_retrieval_relevance"),
-            func.avg(EvaluationResult.context_coverage).filter(
-                EvaluationResult.context_coverage.isnot(None)
-            ).label("avg_context_coverage"),
-            func.avg(EvaluationResult.completeness).filter(
-                EvaluationResult.completeness.isnot(None)
-            ).label("avg_completeness"),
-            func.avg(EvaluationResult.faithfulness).filter(
-                EvaluationResult.faithfulness.isnot(None)
-            ).label("avg_faithfulness"),
+            func.avg(er.retrieval_relevance).filter(er.retrieval_relevance.isnot(None)).label(
+                "avg_retrieval_relevance"
+            ),
+            func.avg(er.context_coverage).filter(er.context_coverage.isnot(None)).label(
+                "avg_context_coverage"
+            ),
+            func.avg(er.completeness).filter(er.completeness.isnot(None)).label("avg_completeness"),
+            func.avg(er.faithfulness).filter(er.faithfulness.isnot(None)).label("avg_faithfulness"),
             func.max(Run.created_at).label("latest_run_at"),
         )
+        .select_from(PipelineConfig)
         .join(Run, Run.pipeline_config_id == PipelineConfig.id)
-        .outerjoin(EvaluationResult, EvaluationResult.run_id == Run.id)
+        .join(er, er.run_id == Run.id)
+        .where(bucket_pred)
         .outerjoin(config_cost_sq, config_cost_sq.c.pc_id == PipelineConfig.id)
         .group_by(PipelineConfig.id, PipelineConfig.name)
         .order_by(PipelineConfig.id)
     )
     rows = (await session.execute(stmt)).all()
 
-    # Top failure type per config (separate query for simplicity)
+    er_top = aliased(EvaluationResult, name="er_top")
+    top_bucket = (
+        _evaluation_in_llm_bucket(er_top) if bucket == "llm" else not_(_evaluation_in_llm_bucket(er_top))
+    )
     top_fail_stmt = (
         select(
             Run.pipeline_config_id,
-            EvaluationResult.failure_type,
+            er_top.failure_type,
             func.count().label("cnt"),
         )
-        .join(EvaluationResult, EvaluationResult.run_id == Run.id)
+        .select_from(Run)
+        .join(er_top, er_top.run_id == Run.id)
         .where(
-            EvaluationResult.failure_type.isnot(None),
-            EvaluationResult.failure_type != "",
-            EvaluationResult.failure_type != "NO_FAILURE",
+            top_bucket,
+            er_top.failure_type.isnot(None),
+            er_top.failure_type != "",
+            er_top.failure_type != "NO_FAILURE",
+            text(SQL_RUNS_TABLE_EXCLUDE_BENCHMARK_REALISM),
         )
-        .group_by(Run.pipeline_config_id, EvaluationResult.failure_type)
+        .group_by(Run.pipeline_config_id, er_top.failure_type)
     )
     top_fail_rows = (await session.execute(top_fail_stmt)).all()
     # Find top failure per config
@@ -295,6 +329,13 @@ async def _config_insights(session: AsyncSession) -> list[ConfigInsight]:
         )
         for r in rows
     ]
+
+
+async def _config_insights(session: AsyncSession) -> ConfigInsightsByEvaluatorBucket:
+    """Heuristic and LLM config insight rows — never blended."""
+    heuristic = await _config_insights_for_bucket(session, "heuristic")
+    llm = await _config_insights_for_bucket(session, "llm")
+    return ConfigInsightsByEvaluatorBucket(heuristic=heuristic, llm=llm)
 
 
 async def get_dashboard_analytics(session: AsyncSession) -> DashboardAnalyticsResponse:

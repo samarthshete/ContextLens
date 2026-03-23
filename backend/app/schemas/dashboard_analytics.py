@@ -67,7 +67,7 @@ class FailureAnalysisSection(BaseModel):
 
 
 class ConfigInsight(BaseModel):
-    """Per-config aggregate metrics."""
+    """Per-config aggregate metrics within one evaluator bucket (heuristic vs LLM)."""
 
     pipeline_config_id: int
     pipeline_config_name: str
@@ -87,6 +87,13 @@ class ConfigInsight(BaseModel):
     top_failure_type: str | None = None
 
 
+class ConfigInsightsByEvaluatorBucket(BaseModel):
+    """Config insights split by evaluation bucket — scores are never blended across buckets."""
+
+    heuristic: list[ConfigInsight] = Field(default_factory=list)
+    llm: list[ConfigInsight] = Field(default_factory=list)
+
+
 class DashboardAnalyticsResponse(BaseModel):
     """Full analytics payload for the dashboard.
 
@@ -101,4 +108,6 @@ class DashboardAnalyticsResponse(BaseModel):
     end_to_end_run_latency_avg_sec: float | None = None
     end_to_end_run_latency_p95_sec: float | None = None
     failure_analysis: FailureAnalysisSection = Field(default_factory=FailureAnalysisSection)
-    config_insights: list[ConfigInsight] = Field(default_factory=list)
+    config_insights: ConfigInsightsByEvaluatorBucket = Field(
+        default_factory=ConfigInsightsByEvaluatorBucket
+    )

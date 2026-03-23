@@ -11,7 +11,7 @@ import { costAvailabilityLine, formatLatencyMs, formatLatencySec, formatUsd } fr
 import { DashboardTrendPanel } from './DashboardTrendPanel'
 import { LatencyDistributionPanel } from './LatencyDistributionPanel'
 import { FailureBreakdownPanel } from './FailureBreakdownPanel'
-import { ConfigInsightsPanel } from './ConfigInsightsPanel'
+import { ConfigInsightsBucketSection } from './ConfigInsightsPanel'
 import {
   buildDashboardExportBundle,
   buildDashboardExportCsv,
@@ -492,7 +492,10 @@ export function DashboardPanel({ pipelineConfigIds, onOpenRunDetail }: Dashboard
                 data={analytics.failure_analysis}
                 onOpenRunDetail={onOpenRunDetail}
               />
-              <ConfigInsightsPanel data={analytics.config_insights} />
+              <ConfigInsightsBucketSection
+                heuristic={analytics.config_insights.heuristic}
+                llm={analytics.config_insights.llm}
+              />
             </>
           ) : null}
 

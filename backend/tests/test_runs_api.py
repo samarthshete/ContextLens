@@ -264,6 +264,12 @@ async def test_list_runs_and_config_comparison(run_client: AsyncClient):
     cmp_body = cmp_resp.json()
     assert cmp_body["evaluator_type"] == "both"
     assert cmp_body["configs"] is None
+    assert cmp_body.get("dataset_id") is None
+    assert cmp_body.get("strict_comparison_applied") is False
+    assert cmp_body.get("min_traced_runs_enforced") is None
+    assert cmp_body.get("comparison_confidence") in ("LOW", "MEDIUM", "HIGH")
+    assert "comparison_statistically_reliable" in cmp_body
+    assert cmp_body.get("recommended_min_traced_runs_for_valid_comparison") == 20
     b = cmp_body["buckets"]
     h_by = {x["pipeline_config_id"]: x for x in b["heuristic"]}
     l_by = {x["pipeline_config_id"]: x for x in b["llm"]}
@@ -281,23 +287,37 @@ async def test_list_runs_and_config_comparison(run_client: AsyncClient):
     assert scb["heuristic"]["best_config_faithfulness"] is None
     assert scb["heuristic"]["faithfulness_delta_pct"] is None
 
-    comb = await run_client.get(
+    strict_no_ds = await run_client.get(
         f"{BASE}/runs/config-comparison",
         params=[
+            ("pipeline_config_ids", pid_h),
             ("pipeline_config_ids", pid_l),
-            ("combine_evaluators", "true"),
+            ("strict_comparison", "true"),
         ],
     )
-    assert comb.status_code == 200
-    cj = comb.json()
-    assert cj["evaluator_type"] == "combined"
-    assert len(cj["configs"]) == 1
-    assert cj["configs"][0]["traced_runs"] == 1
-    assert cj["configs"][0]["avg_faithfulness"] == pytest.approx(0.9)
-    sc = cj["score_comparison"]
-    assert sc is not None
-    assert sc["best_config_faithfulness"] is None
-    assert sc["faithfulness_delta_pct"] is None
-    assert sc["best_config_completeness"] == pid_l
-    assert sc["worst_config_completeness"] == pid_l
-    assert sc["completeness_delta_pct"] == pytest.approx(0.0)
+    assert strict_no_ds.status_code == 400
+
+    strict_mismatch = await run_client.get(
+        f"{BASE}/runs/config-comparison",
+        params=[
+            ("pipeline_config_ids", pid_h),
+            ("pipeline_config_ids", pid_l),
+            ("strict_comparison", "true"),
+            ("dataset_id", ds_id),
+        ],
+    )
+    assert strict_mismatch.status_code == 400
+    detail = strict_mismatch.json()["detail"].lower()
+    assert "query_case" in detail
+
+    min2 = await run_client.get(
+        f"{BASE}/runs/config-comparison",
+        params=[
+            ("pipeline_config_ids", pid_h),
+            ("pipeline_config_ids", pid_l),
+            ("evaluator_type", "both"),
+            ("min_traced_runs", "2"),
+        ],
+    )
+    assert min2.status_code == 400
+    assert "traced runs" in min2.json()["detail"].lower()

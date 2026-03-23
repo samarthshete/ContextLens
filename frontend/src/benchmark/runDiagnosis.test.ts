@@ -242,6 +242,16 @@ describe('runDiagnosis', () => {
       expect(lines.some((l) => l.key === 'failure-context-truncation')).toBe(true)
     })
 
+    it('adds explicit line for CONTEXT_INSUFFICIENT', () => {
+      const lines = diagnosisSummaryFor(
+        baseRun({
+          retrieval_hits: [{ rank: 1, score: 0.6, chunk_id: 1, document_id: 1, content: LONG, chunk_index: 0 }],
+          evaluation: { failure_type: 'CONTEXT_INSUFFICIENT', used_llm_judge: false },
+        }),
+      )
+      expect(lines.some((l) => l.key === 'failure-context-insufficient')).toBe(true)
+    })
+
     it('adds explicit line for MIXED_FAILURE', () => {
       const lines = diagnosisSummaryFor(
         baseRun({

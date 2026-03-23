@@ -76,7 +76,7 @@ async function mockDashboardApi(page: Page) {
           by_config: [],
           recent_failed_runs: [],
         },
-        config_insights: [],
+        config_insights: { heuristic: [], llm: [] },
       },
       contentType: 'application/json',
     }),

@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.failure_taxonomy import normalize_failure_type
-from app.models import EvaluationResult, Run
+from app.models import EvaluationResult, GenerationResult, RetrievalResult, Run
 from app.services import trace_persistence as tp
-from app.services.run_lifecycle import STATUS_COMPLETED, STATUS_RETRIEVAL_COMPLETED
+from app.services.run_lifecycle import (
+    STATUS_COMPLETED,
+    STATUS_GENERATION_COMPLETED,
+    STATUS_RETRIEVAL_COMPLETED,
+)
 
 
 async def persist_evaluation_and_complete_run(
@@ -58,7 +61,33 @@ async def persist_evaluation_and_complete_run(
     if existing is not None:
         raise ValueError(f"Evaluation already exists for run id={run_id}")
 
-    ft = normalize_failure_type(failure_type)
+    if prerequisite_status == STATUS_RETRIEVAL_COMPLETED:
+        n_rr = await session.scalar(
+            select(func.count()).select_from(RetrievalResult).where(RetrievalResult.run_id == run_id)
+        )
+        if not n_rr:
+            raise ValueError(
+                f"Run id={run_id} has no retrieval_results rows; refusing to mark completed"
+            )
+
+    if prerequisite_status == STATUS_GENERATION_COMPLETED:
+        n_gen = await session.scalar(
+            select(func.count()).select_from(GenerationResult).where(GenerationResult.run_id == run_id)
+        )
+        if not n_gen:
+            raise ValueError(
+                f"Run id={run_id} has no generation_results row; refusing LLM evaluation completion"
+            )
+
+    if used_llm_judge:
+        n_gen_llm = await session.scalar(
+            select(func.count()).select_from(GenerationResult).where(GenerationResult.run_id == run_id)
+        )
+        if not n_gen_llm:
+            raise ValueError(
+                f"Run id={run_id}: used_llm_judge=True but no generation_results; "
+                "refusing to mark completed (full pipeline requires generation)"
+            )
 
     er = await tp.store_evaluation_result(
         session,
@@ -68,7 +97,7 @@ async def persist_evaluation_and_complete_run(
         retrieval_relevance=retrieval_relevance,
         context_coverage=context_coverage,
         groundedness=groundedness,
-        failure_type=ft,
+        failure_type=failure_type,
         used_llm_judge=used_llm_judge,
         cost_usd=cost_usd,
         metadata_json=metadata_json,

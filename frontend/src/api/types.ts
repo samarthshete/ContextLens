@@ -126,6 +126,12 @@ export interface ConfigComparisonMetrics {
   avg_context_coverage: number | null
   failure_type_counts: Record<string, number>
   avg_evaluation_cost_per_run_usd: number | null
+  stddev_samp_completeness?: number | null
+  stddev_samp_faithfulness?: number | null
+  stddev_samp_retrieval_relevance?: number | null
+  stddev_samp_context_coverage?: number | null
+  stddev_samp_retrieval_latency_ms?: number | null
+  stddev_samp_total_latency_ms?: number | null
 }
 
 export interface ConfigComparisonResponse {
@@ -135,6 +141,13 @@ export interface ConfigComparisonResponse {
   buckets: Record<string, ConfigComparisonMetrics[]> | null
   score_comparison: ConfigScoreComparisonSummary | null
   score_comparison_buckets: Record<string, ConfigScoreComparisonSummary> | null
+  dataset_id?: number | null
+  strict_comparison_applied?: boolean
+  min_traced_runs_enforced?: number | null
+  comparison_confidence?: 'LOW' | 'MEDIUM' | 'HIGH'
+  comparison_statistically_reliable?: boolean
+  min_traced_runs_across_configs?: number
+  recommended_min_traced_runs_for_valid_comparison?: number
 }
 
 /** ``GET /runs/dashboard-summary`` — observability aggregates. */
@@ -256,6 +269,8 @@ export interface RunDetail {
   run_id: number
   status: string
   created_at: string
+  /** Batch / experiment tags when backend persists ``runs.metadata_json``. */
+  metadata_json?: Record<string, unknown> | null
   retrieval_latency_ms: number | null
   generation_latency_ms: number | null
   evaluation_latency_ms: number | null
@@ -368,6 +383,12 @@ export interface ConfigInsight {
   top_failure_type: string | null
 }
 
+/** Config insights split by evaluation bucket (same rules as config-comparison / metrics). */
+export interface ConfigInsightsByEvaluatorBucket {
+  heuristic: ConfigInsight[]
+  llm: ConfigInsight[]
+}
+
 export interface DashboardAnalyticsResponse {
   time_series: TimeSeriesDay[]
   latency_distribution: LatencyDistributionSection
@@ -375,7 +396,7 @@ export interface DashboardAnalyticsResponse {
   end_to_end_run_latency_avg_sec: number | null
   end_to_end_run_latency_p95_sec: number | null
   failure_analysis: FailureAnalysisSection
-  config_insights: ConfigInsight[]
+  config_insights: ConfigInsightsByEvaluatorBucket
 }
 
 /** `POST /runs/{id}/requeue` — **202** body. */

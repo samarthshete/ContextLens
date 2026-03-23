@@ -21,6 +21,33 @@ _WORD = re.compile(r"[a-z0-9]+", re.I)
 
 EVALUATOR_ID = "minimal_retrieval_heuristic_v1"
 
+# Heuristic failure thresholds (fixed; batch realism may re-classify after score noise).
+RELEVANCE_PARTIAL_THRESHOLD = 0.3
+CONTEXT_INSUFFICIENT_THRESHOLD = 0.4
+COMPLETENESS_INCOMPLETE_THRESHOLD = 0.5
+
+
+def classify_heuristic_failure_from_scores(
+    *,
+    retrieval_miss: bool,
+    retrieval_relevance: float | None,
+    context_coverage: float | None,
+    completeness: float | None,
+) -> str:
+    """Map scores to taxonomy. **NO_FAILURE** only when all applicable checks pass.
+
+    Order: retrieval miss → low relevance → low coverage → low completeness → OK.
+    """
+    if retrieval_miss:
+        return FailureType.RETRIEVAL_MISS.value
+    if retrieval_relevance is not None and retrieval_relevance < RELEVANCE_PARTIAL_THRESHOLD:
+        return FailureType.RETRIEVAL_PARTIAL.value
+    if context_coverage is not None and context_coverage < CONTEXT_INSUFFICIENT_THRESHOLD:
+        return FailureType.CONTEXT_INSUFFICIENT.value
+    if completeness is not None and completeness < COMPLETENESS_INCOMPLETE_THRESHOLD:
+        return FailureType.ANSWER_INCOMPLETE.value
+    return FailureType.NO_FAILURE.value
+
 
 def significant_tokens(text: str) -> set[str]:
     """Lowercase alphanumeric tokens of length >= 2."""
@@ -113,14 +140,26 @@ async def compute_minimal_retrieval_evaluation(
             "Heuristic metrics from stored retrieval scores and lexical overlap; "
             "no LLM judge and no faithfulness (no generated answer persisted)."
         ),
+        "failure_rules": {
+            "relevance_lt": RELEVANCE_PARTIAL_THRESHOLD,
+            "context_coverage_lt": CONTEXT_INSUFFICIENT_THRESHOLD,
+            "completeness_lt": COMPLETENESS_INCOMPLETE_THRESHOLD,
+        },
     }
+
+    failure_type = classify_heuristic_failure_from_scores(
+        retrieval_miss=False,
+        retrieval_relevance=retrieval_relevance,
+        context_coverage=context_coverage,
+        completeness=completeness,
+    )
 
     return MinimalRetrievalEvalScores(
         faithfulness=None,
         completeness=completeness,
         retrieval_relevance=retrieval_relevance,
         context_coverage=context_coverage,
-        failure_type=None,
+        failure_type=failure_type,
         used_llm_judge=False,
         metadata_json=meta,
     )

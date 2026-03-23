@@ -43,7 +43,7 @@ function minimalAnalytics() {
       by_config: [],
       recent_failed_runs: [],
     },
-    config_insights: [],
+    config_insights: { heuristic: [], llm: [] },
   }
 }
 
@@ -357,53 +357,56 @@ describe('DashboardPanel', () => {
     dashboardSummary.mockResolvedValue(minimalDashboard())
     dashboardAnalytics.mockResolvedValue({
       ...minimalAnalytics(),
-      config_insights: [
-        {
-          pipeline_config_id: 1,
-          pipeline_config_name: 'Busy slow',
-          traced_runs: 8,
-          completed_runs: 7,
-          failed_runs: 1,
-          avg_total_latency_ms: 400,
-          min_total_latency_ms: 100,
-          max_total_latency_ms: 500,
-          avg_cost_usd: 0.02,
-          total_cost_usd: 0.16,
-          avg_retrieval_relevance: 0.55,
-          avg_context_coverage: 0.6,
-          avg_completeness: 0.62,
-          avg_faithfulness: 0.58,
-          latest_run_at: '2026-03-20T12:00:00.000Z',
-          top_failure_type: 'UNKNOWN',
-        },
-        {
-          pipeline_config_id: 2,
-          pipeline_config_name: 'Fast quality',
-          traced_runs: 3,
-          completed_runs: 3,
-          failed_runs: 0,
-          avg_total_latency_ms: 90,
-          min_total_latency_ms: 80,
-          max_total_latency_ms: 120,
-          avg_cost_usd: 0.005,
-          total_cost_usd: 0.015,
-          avg_retrieval_relevance: 0.92,
-          avg_context_coverage: 0.88,
-          avg_completeness: 0.9,
-          avg_faithfulness: 0.87,
-          latest_run_at: '2026-03-19T10:00:00.000Z',
-          top_failure_type: null,
-        },
-      ],
+      config_insights: {
+        heuristic: [],
+        llm: [
+          {
+            pipeline_config_id: 1,
+            pipeline_config_name: 'Busy slow',
+            traced_runs: 8,
+            completed_runs: 7,
+            failed_runs: 1,
+            avg_total_latency_ms: 400,
+            min_total_latency_ms: 100,
+            max_total_latency_ms: 500,
+            avg_cost_usd: 0.02,
+            total_cost_usd: 0.16,
+            avg_retrieval_relevance: 0.55,
+            avg_context_coverage: 0.6,
+            avg_completeness: 0.62,
+            avg_faithfulness: 0.58,
+            latest_run_at: '2026-03-20T12:00:00.000Z',
+            top_failure_type: 'UNKNOWN',
+          },
+          {
+            pipeline_config_id: 2,
+            pipeline_config_name: 'Fast quality',
+            traced_runs: 3,
+            completed_runs: 3,
+            failed_runs: 0,
+            avg_total_latency_ms: 90,
+            min_total_latency_ms: 80,
+            max_total_latency_ms: 120,
+            avg_cost_usd: 0.005,
+            total_cost_usd: 0.015,
+            avg_retrieval_relevance: 0.92,
+            avg_context_coverage: 0.88,
+            avg_completeness: 0.9,
+            avg_faithfulness: 0.87,
+            latest_run_at: '2026-03-19T10:00:00.000Z',
+            top_failure_type: null,
+          },
+        ],
+      },
     })
 
     render(<DashboardPanel pipelineConfigIds={[]} />)
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Config Insights', level: 2 })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Config insights', level: 2 })).toBeInTheDocument()
     })
 
-    const section = screen.getByTestId('config-insights')
+    const section = screen.getByTestId('config-insights-llm')
     expect(section.textContent).toMatch(/Fastest/i)
     expect(section.textContent).toMatch(/Most used/i)
 

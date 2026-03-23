@@ -7,6 +7,7 @@ from decimal import Decimal
 from sqlalchemy import exists, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.analytics_run_scope import sqlalchemy_organic_run_clause
 from app.domain.evaluator_bucket import (
     resolved_evaluator_type,
     sql_is_heuristic_bucket,
@@ -40,18 +41,31 @@ def _ms_to_sec(ms: float | None) -> float | None:
 
 
 async def get_dashboard_summary(session: AsyncSession) -> DashboardSummaryResponse:
-    total_runs = int(await session.scalar(select(func.count()).select_from(Run)) or 0)
+    # Same organic ``runs`` population as ``dashboard_analytics`` / ``config_comparison`` / ``aggregate.py``.
+    # ORM clause (not raw ``runs.`` text) so SQLAlchemy table aliases stay correct.
+    organic = sqlalchemy_organic_run_clause(Run)
+
+    total_runs = int(
+        await session.scalar(select(func.count()).select_from(Run).where(organic)) or 0
+    )
 
     completed = int(
-        await session.scalar(select(func.count()).select_from(Run).where(Run.status == "completed"))
+        await session.scalar(
+            select(func.count()).select_from(Run).where(Run.status == "completed", organic)
+        )
         or 0
     )
     failed = int(
-        await session.scalar(select(func.count()).select_from(Run).where(Run.status == "failed")) or 0
+        await session.scalar(
+            select(func.count()).select_from(Run).where(Run.status == "failed", organic)
+        )
+        or 0
     )
     in_progress = int(
         await session.scalar(
-            select(func.count()).select_from(Run).where(Run.status.not_in(("completed", "failed")))
+            select(func.count())
+            .select_from(Run)
+            .where(Run.status.not_in(("completed", "failed")), organic)
         )
         or 0
     )
@@ -64,7 +78,7 @@ async def get_dashboard_summary(session: AsyncSession) -> DashboardSummaryRespon
             select(func.count(func.distinct(Run.id)))
             .select_from(Run)
             .join(EvaluationResult, EvaluationResult.run_id == Run.id)
-            .where(text(f"({heur_sql})"))
+            .where(text(f"({heur_sql})"), organic)
         )
         or 0
     )
@@ -73,7 +87,7 @@ async def get_dashboard_summary(session: AsyncSession) -> DashboardSummaryRespon
             select(func.count(func.distinct(Run.id)))
             .select_from(Run)
             .join(EvaluationResult, EvaluationResult.run_id == Run.id)
-            .where(text(f"({llm_sql})"))
+            .where(text(f"({llm_sql})"), organic)
         )
         or 0
     )
@@ -82,7 +96,7 @@ async def get_dashboard_summary(session: AsyncSession) -> DashboardSummaryRespon
             select(func.count())
             .select_from(Run)
             .outerjoin(EvaluationResult, EvaluationResult.run_id == Run.id)
-            .where(EvaluationResult.id.is_(None))
+            .where(EvaluationResult.id.is_(None), organic)
         )
         or 0
     )
@@ -94,6 +108,7 @@ async def get_dashboard_summary(session: AsyncSession) -> DashboardSummaryRespon
             select(func.count())
             .select_from(Run)
             .where(
+                organic,
                 exists(select(1).select_from(RetrievalResult).where(RetrievalResult.run_id == Run.id)),
                 exists(select(1).select_from(EvaluationResult).where(EvaluationResult.run_id == Run.id)),
             )
@@ -101,7 +116,12 @@ async def get_dashboard_summary(session: AsyncSession) -> DashboardSummaryRespon
         or 0
     )
     configs_tested = int(
-        await session.scalar(select(func.count(func.distinct(Run.pipeline_config_id))).select_from(Run)) or 0
+        await session.scalar(
+            select(func.count(func.distinct(Run.pipeline_config_id)))
+            .select_from(Run)
+            .where(organic)
+        )
+        or 0
     )
     documents_processed = int(
         await session.scalar(
@@ -111,30 +131,47 @@ async def get_dashboard_summary(session: AsyncSession) -> DashboardSummaryRespon
     )
     chunks_indexed = int(await session.scalar(select(func.count()).select_from(Chunk)) or 0)
 
-    retrieval_dist = await get_phase_latency_distribution(session, Run.retrieval_latency_ms)
-    total_dist = await get_phase_latency_distribution(session, Run.total_latency_ms)
+    excl_lat = {"exclude_benchmark_realism_runs": True}
+    retrieval_dist = await get_phase_latency_distribution(session, Run.retrieval_latency_ms, **excl_lat)
+    total_dist = await get_phase_latency_distribution(session, Run.total_latency_ms, **excl_lat)
     avg_gen = await session.scalar(
-        select(func.avg(Run.generation_latency_ms)).where(Run.generation_latency_ms.isnot(None))
+        select(func.avg(Run.generation_latency_ms))
+        .select_from(Run)
+        .where(Run.generation_latency_ms.isnot(None), organic)
     )
     avg_ev = await session.scalar(
-        select(func.avg(Run.evaluation_latency_ms)).where(Run.evaluation_latency_ms.isnot(None))
+        select(func.avg(Run.evaluation_latency_ms))
+        .select_from(Run)
+        .where(Run.evaluation_latency_ms.isnot(None), organic)
     )
 
     total_cost = await session.scalar(
-        select(func.sum(EvaluationResult.cost_usd)).where(EvaluationResult.cost_usd.isnot(None))
+        select(func.sum(EvaluationResult.cost_usd))
+        .select_from(EvaluationResult)
+        .join(Run, Run.id == EvaluationResult.run_id)
+        .where(EvaluationResult.cost_usd.isnot(None), organic)
     )
     avg_cost = await session.scalar(
-        select(func.avg(EvaluationResult.cost_usd)).where(EvaluationResult.cost_usd.isnot(None))
+        select(func.avg(EvaluationResult.cost_usd))
+        .select_from(EvaluationResult)
+        .join(Run, Run.id == EvaluationResult.run_id)
+        .where(EvaluationResult.cost_usd.isnot(None), organic)
     )
     with_cost = int(
         await session.scalar(
-            select(func.count()).select_from(EvaluationResult).where(EvaluationResult.cost_usd.isnot(None))
+            select(func.count())
+            .select_from(EvaluationResult)
+            .join(Run, Run.id == EvaluationResult.run_id)
+            .where(EvaluationResult.cost_usd.isnot(None), organic)
         )
         or 0
     )
     cost_na = int(
         await session.scalar(
-            select(func.count()).select_from(EvaluationResult).where(EvaluationResult.cost_usd.is_(None))
+            select(func.count())
+            .select_from(EvaluationResult)
+            .join(Run, Run.id == EvaluationResult.run_id)
+            .where(EvaluationResult.cost_usd.is_(None), organic)
         )
         or 0
     )
@@ -146,7 +183,9 @@ async def get_dashboard_summary(session: AsyncSession) -> DashboardSummaryRespon
             EvaluationResult.run_id.label("run_id"),
             func.sum(EvaluationResult.cost_usd).label("run_cost"),
         )
-        .where(EvaluationResult.cost_usd.isnot(None), er_llm_bucket)
+        .select_from(EvaluationResult)
+        .join(Run, Run.id == EvaluationResult.run_id)
+        .where(EvaluationResult.cost_usd.isnot(None), er_llm_bucket, organic)
         .group_by(EvaluationResult.run_id)
     ).subquery()
     avg_cost_per_llm_run = await session.scalar(
@@ -161,9 +200,12 @@ async def get_dashboard_summary(session: AsyncSession) -> DashboardSummaryRespon
             EvaluationResult.run_id.label("run_id"),
             func.sum(EvaluationResult.cost_usd).label("run_cost"),
         )
+        .select_from(EvaluationResult)
+        .join(Run, Run.id == EvaluationResult.run_id)
         .where(
             EvaluationResult.cost_usd.isnot(None),
             er_llm_bucket,
+            organic,
             exists(
                 select(1)
                 .select_from(GenerationResult)
@@ -182,9 +224,12 @@ async def get_dashboard_summary(session: AsyncSession) -> DashboardSummaryRespon
     fail_rows = (
         await session.execute(
             select(EvaluationResult.failure_type, func.count())
+            .select_from(EvaluationResult)
+            .join(Run, Run.id == EvaluationResult.run_id)
             .where(
                 EvaluationResult.failure_type.isnot(None),
                 EvaluationResult.failure_type != "",
+                organic,
             )
             .group_by(EvaluationResult.failure_type)
         )
@@ -195,6 +240,7 @@ async def get_dashboard_summary(session: AsyncSession) -> DashboardSummaryRespon
         select(Run, EvaluationResult, QueryCase)
         .join(QueryCase, Run.query_case_id == QueryCase.id)
         .outerjoin(EvaluationResult, EvaluationResult.run_id == Run.id)
+        .where(organic)
         .order_by(Run.created_at.desc(), Run.id.desc())
         .limit(20)
     )

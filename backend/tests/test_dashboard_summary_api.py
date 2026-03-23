@@ -31,7 +31,18 @@ async def dash_client():
         yield c
 
 
-async def _seed_run_with_eval(session, *, status: str, failure_type: str, cost: float | None):
+async def _seed_run_with_eval(
+    session,
+    *,
+    status: str,
+    failure_type: str,
+    cost: float | None,
+    run_metadata: dict | None = None,
+    retrieval_latency_ms: int = 10,
+    generation_latency_ms: int = 20,
+    evaluation_latency_ms: int = 30,
+    total_latency_ms: int = 60,
+):
     ds = Dataset(name="dash_ds", description="")
     session.add(ds)
     await session.flush()
@@ -50,10 +61,11 @@ async def _seed_run_with_eval(session, *, status: str, failure_type: str, cost: 
         query_case_id=qc.id,
         pipeline_config_id=pc.id,
         status=status,
-        retrieval_latency_ms=10,
-        generation_latency_ms=20,
-        evaluation_latency_ms=30,
-        total_latency_ms=60,
+        metadata_json=run_metadata,
+        retrieval_latency_ms=retrieval_latency_ms,
+        generation_latency_ms=generation_latency_ms,
+        evaluation_latency_ms=evaluation_latency_ms,
+        total_latency_ms=total_latency_ms,
     )
     session.add(run)
     await session.flush()
@@ -404,3 +416,66 @@ async def test_dashboard_summary_cost_per_full_rag_run(dash_client: AsyncClient)
     # With no prior full-RAG measured rows in DB, the single seed fixes the average at 0.055.
     if n0 == 0:
         assert b1["cost"]["avg_cost_usd_per_full_rag_run"] == pytest.approx(0.055, rel=1e-5)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_summary_excludes_benchmark_realism_runs(dash_client: AsyncClient):
+    """Runs with ``metadata_json.benchmark_realism`` do not affect summary aggregates."""
+    b0 = (await dash_client.get(f"{BASE}/runs/dashboard-summary")).json()
+    async with async_session_maker() as session:
+        await _seed_run_with_eval(
+            session,
+            status=STATUS_COMPLETED,
+            failure_type="UNKNOWN",
+            cost=0.99,
+            run_metadata={"benchmark_realism": True},
+        )
+        await _seed_run_with_eval(
+            session,
+            status=STATUS_COMPLETED,
+            failure_type="NO_FAILURE",
+            cost=0.02,
+            run_metadata=None,
+        )
+
+    b1 = (await dash_client.get(f"{BASE}/runs/dashboard-summary")).json()
+    assert b1["total_runs"] == b0["total_runs"] + 1
+    assert b1["evaluator_counts"]["llm_runs"] == b0["evaluator_counts"]["llm_runs"] + 1
+    assert b1["cost"]["evaluation_rows_with_cost"] == b0["cost"]["evaluation_rows_with_cost"] + 1
+    assert b1["failure_type_counts"].get("UNKNOWN", 0) == b0["failure_type_counts"].get("UNKNOWN", 0)
+    assert b1["failure_type_counts"].get("NO_FAILURE", 0) == b0["failure_type_counts"].get("NO_FAILURE", 0) + 1
+
+
+@pytest.mark.asyncio
+async def test_dashboard_summary_latency_matches_analytics_excluding_realism(dash_client: AsyncClient):
+    """Retrieval latency mean on summary uses the same run scope as dashboard-analytics."""
+    sum0 = (await dash_client.get(f"{BASE}/runs/dashboard-summary")).json()
+    an0 = (await dash_client.get(f"{BASE}/runs/dashboard-analytics")).json()
+    r_sum = sum0["latency"]["avg_retrieval_latency_ms"]
+    r_an = an0["latency_distribution"]["retrieval"]["avg_ms"]
+    assert (r_sum is None) == (r_an is None), f"summary vs analytics retrieval avg: {r_sum!r} vs {r_an!r}"
+    if r_sum is not None:
+        assert r_sum == pytest.approx(r_an)
+
+    async with async_session_maker() as session:
+        await _seed_run_with_eval(
+            session,
+            status=STATUS_COMPLETED,
+            failure_type="NO_FAILURE",
+            cost=None,
+            run_metadata={"benchmark_realism": True},
+            retrieval_latency_ms=99_999,
+            generation_latency_ms=0,
+            evaluation_latency_ms=0,
+            total_latency_ms=99_999,
+        )
+
+    sum1 = (await dash_client.get(f"{BASE}/runs/dashboard-summary")).json()
+    an1 = (await dash_client.get(f"{BASE}/runs/dashboard-analytics")).json()
+    assert sum1["latency"]["avg_retrieval_latency_ms"] == r_sum
+    assert an1["latency_distribution"]["retrieval"]["avg_ms"] == r_an
+    r_sum_1 = sum1["latency"]["avg_retrieval_latency_ms"]
+    r_an_1 = an1["latency_distribution"]["retrieval"]["avg_ms"]
+    assert (r_sum_1 is None) == (r_an_1 is None)
+    if r_sum_1 is not None:
+        assert r_sum_1 == pytest.approx(r_an_1)

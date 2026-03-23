@@ -21,7 +21,7 @@ Browser  →  React SPA (Vite)
  + pgvector  (full runs)   (generation + judge)
 ```
 
-**Frontend** is a single-page app with client-side routing (`react-router-dom`). Routes: `/benchmark`, `/runs`, `/runs/:runId`, `/queue`, `/compare`, `/dashboard`.
+**Frontend** is a single-page app with client-side routing (`react-router-dom`). Routes include `/benchmark`, `/runs`, `/runs/:runId`, `/documents/:documentId`, `/queue`, `/compare`, `/dashboard`.
 
 **Backend** is a FastAPI application with async SQLAlchemy. All benchmark runs produce traced database rows.
 
@@ -64,7 +64,7 @@ Enqueued via Redis + RQ. Durable across API restarts.
 | `datasets` | Benchmark dataset registry |
 | `query_cases` | Queries with optional expected answers |
 | `pipeline_configs` | Frozen retrieval parameters (top-k, chunk strategy) |
-| `runs` | One execution per query × config; stores phase latencies |
+| `runs` | One execution per query × config; phase latencies; optional `metadata_json` (batch / experiment tags) |
 | `retrieval_results` | Per-chunk scores and ranks for each run |
 | `generation_results` | LLM answer text, model, token usage (1:1 with run) |
 | `evaluation_results` | Scores, failure type, cost, judge metadata |
@@ -102,7 +102,7 @@ Two evaluator modes, never blended in aggregations:
 
 ### Failure Taxonomy
 
-9 types: `NO_FAILURE`, `RETRIEVAL_MISS`, `RETRIEVAL_PARTIAL`, `CHUNK_FRAGMENTATION`, `CONTEXT_TRUNCATION`, `ANSWER_UNSUPPORTED`, `ANSWER_INCOMPLETE`, `MIXED_FAILURE`, `UNKNOWN`.
+10 types in `app/domain/failure_taxonomy.py`: `NO_FAILURE`, `RETRIEVAL_MISS`, `RETRIEVAL_PARTIAL`, `CHUNK_FRAGMENTATION`, `CONTEXT_INSUFFICIENT`, `CONTEXT_TRUNCATION`, `ANSWER_UNSUPPORTED`, `ANSWER_INCOMPLETE`, `MIXED_FAILURE`, `UNKNOWN`.
 
 All failure types are normalized via `normalize_failure_type()` before persistence.
 
@@ -129,6 +129,6 @@ The run detail view computes diagnosis, diff, timeline, and source labels entire
 
 ## Testing
 
-- **178 pytest tests** — fully offline via deterministic fake embeddings in `conftest.py`
-- **199 Vitest tests** — component + logic tests with mocked API
+- **203 pytest tests** — fully offline via deterministic fake embeddings in `conftest.py`
+- **200 Vitest tests** — component + logic tests with mocked API
 - **14 Playwright E2E tests** — `page.route()` API mocking, no backend required

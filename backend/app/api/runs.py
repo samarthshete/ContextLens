@@ -78,9 +78,23 @@ async def compare_configs_endpoint(
         "both",
         description="When `both`, response uses `buckets.heuristic` / `buckets.llm`.",
     ),
-    combine_evaluators: bool = Query(
+    dataset_id: int | None = Query(
+        None,
+        ge=1,
+        description="Restrict to runs whose query case belongs to this dataset (same queries/corpus slice).",
+    ),
+    min_traced_runs: int | None = Query(
+        None,
+        ge=1,
+        description="Require at least this many traced runs per pipeline_config_id in each computed bucket.",
+    ),
+    strict_comparison: bool = Query(
         False,
-        description="If true, merge heuristic + LLM into one row per config (`evaluator_type=combined`).",
+        description="Requires dataset_id; enforces identical query_case_id coverage across configs and min 2 runs per config (or higher if min_traced_runs is set).",
+    ),
+    include_benchmark_realism: bool = Query(
+        False,
+        description="Include runs tagged with benchmark_realism metadata (normally excluded from analytics).",
     ),
     db: AsyncSession = Depends(get_db),
 ) -> ConfigComparisonResponse:
@@ -89,8 +103,11 @@ async def compare_configs_endpoint(
         return await compare_pipeline_configs(
             db,
             pipeline_config_ids,
-            combine_evaluators=combine_evaluators,
             evaluator_type=evaluator_type,
+            dataset_id=dataset_id,
+            min_traced_runs=min_traced_runs,
+            strict_comparison=strict_comparison,
+            include_benchmark_realism=include_benchmark_realism,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

@@ -252,7 +252,7 @@ Do these in order; use browser devtools **Network** for CORS.
 10. [ ] **Queue:** trigger `eval_mode=full` (needs OpenAI/Anthropic key); worker consumes job; run reaches terminal state in UI.
 11. [ ] **Requeue** (optional): eligible full run → **202** with write key on mutating path.
 
-### 10.9 Blockers / limitations (Render-specific)
+### 9.9 Blockers / limitations (Render-specific)
 
 - **Free Key Value / plan changes:** if `plan: free` for Key Value is unavailable in your workspace, set a paid **starter** plan in the Dashboard or edit `render.yaml`.
 - **Cold starts:** Render free/low-tier web services may spin down; first request can be slow.

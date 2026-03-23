@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.failure_taxonomy import failure_type_for_storage
 from app.models import (
     Dataset,
     EvaluationResult,
@@ -79,11 +80,13 @@ async def create_run(
     query_case_id: int,
     pipeline_config_id: int,
     status: str = "pending",
+    metadata_json: dict | None = None,
 ) -> Run:
     r = Run(
         query_case_id=query_case_id,
         pipeline_config_id=pipeline_config_id,
         status=status,
+        metadata_json=metadata_json,
     )
     session.add(r)
     await session.flush()
@@ -130,7 +133,7 @@ async def store_evaluation_result(
         retrieval_relevance=retrieval_relevance,
         context_coverage=context_coverage,
         groundedness=groundedness,
-        failure_type=failure_type,
+        failure_type=failure_type_for_storage(failure_type),
         used_llm_judge=used_llm_judge,
         cost_usd=cost_usd,
         metadata_json=metadata_json,

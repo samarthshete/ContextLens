@@ -286,15 +286,26 @@ export function buildDashboardExportCsv(
     }
     lines.push('')
 
-    const insights = Array.isArray(analytics.config_insights) ? analytics.config_insights : []
-    lines.push(joinCsvRow(['section', 'config_insights']))
-    lines.push(joinCsvRow(configInsightHeader()))
-    for (const c of insights) {
-      if (c && typeof c === 'object') {
-        lines.push(joinCsvRow(configInsightRow(c)))
+    const rawCi = analytics.config_insights
+    const buckets =
+      rawCi && typeof rawCi === 'object' && !Array.isArray(rawCi)
+        ? rawCi
+        : { heuristic: [] as ConfigInsight[], llm: [] as ConfigInsight[] }
+    const heuristicInsights = Array.isArray(buckets.heuristic) ? buckets.heuristic : []
+    const llmInsights = Array.isArray(buckets.llm) ? buckets.llm : []
+
+    const pushInsightRows = (section: string, rows: ConfigInsight[]) => {
+      lines.push(joinCsvRow(['section', section]))
+      lines.push(joinCsvRow(configInsightHeader()))
+      for (const c of rows) {
+        if (c && typeof c === 'object') {
+          lines.push(joinCsvRow(configInsightRow(c)))
+        }
       }
+      lines.push('')
     }
-    lines.push('')
+    pushInsightRows('config_insights_heuristic', heuristicInsights)
+    pushInsightRows('config_insights_llm', llmInsights)
   }
 
   return lines.join('\n')

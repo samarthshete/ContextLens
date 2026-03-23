@@ -88,6 +88,7 @@ async def get_run_detail(session: AsyncSession, run_id: int) -> RunDetailRespons
         run_id=run.id,
         status=run.status,
         created_at=run.created_at,
+        metadata_json=run.metadata_json,
         retrieval_latency_ms=run.retrieval_latency_ms,
         generation_latency_ms=run.generation_latency_ms,
         evaluation_latency_ms=run.evaluation_latency_ms,

@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useId, useMemo } from 'react'
 import type { ConfigInsight } from '../api/types'
 import { formatLatencyMs, formatUsd } from './dashboardFormat'
 import {
@@ -25,7 +25,64 @@ function InsightBadge({ label, name }: { label: string; name: string | null }) {
   )
 }
 
-export function ConfigInsightsPanel({ data }: { data: ConfigInsight[] }) {
+export function ConfigInsightsBucketSection({
+  heuristic,
+  llm,
+}: {
+  heuristic: ConfigInsight[]
+  llm: ConfigInsight[]
+}) {
+  const bothEmpty = heuristic.length === 0 && llm.length === 0
+
+  if (bothEmpty) {
+    return (
+      <section
+        className="cl-card"
+        aria-label="Config insights"
+        data-testid="config-insights"
+      >
+        <h2>Config insights</h2>
+        <p className="cl-muted">
+          Split by evaluator bucket — <strong>heuristic</strong> vs <strong>LLM judge</strong>. Average
+          scores use only runs in that bucket (no mixing).
+        </p>
+        <p className="cl-muted cl-empty-inline">No config insights yet.</p>
+      </section>
+    )
+  }
+
+  return (
+    <section aria-label="Config insights by evaluator" data-testid="config-insights">
+      <div className="cl-card cl-config-insights-intro">
+        <h2>Config insights</h2>
+        <p className="cl-muted">
+          Split by evaluator bucket — <strong>heuristic</strong> vs <strong>LLM judge</strong>. Each table
+          averages scores and costs only over runs evaluated in that bucket (
+          <code>analytics.config_insights.heuristic</code> / <code>.llm</code>).
+        </p>
+      </div>
+      <ConfigInsightsPanel
+        title="Heuristic evaluation"
+        bucketTestId="config-insights-heuristic"
+        data={heuristic}
+      />
+      <ConfigInsightsPanel
+        title="LLM judge evaluation"
+        bucketTestId="config-insights-llm"
+        data={llm}
+      />
+    </section>
+  )
+}
+
+type ConfigInsightsPanelProps = {
+  title: string
+  bucketTestId: string
+  data: ConfigInsight[]
+}
+
+export function ConfigInsightsPanel({ title, bucketTestId, data }: ConfigInsightsPanelProps) {
+  const headingId = useId()
   const sorted = useMemo(() => sortConfigInsightsByTracedDesc(data), [data])
   const winners = useMemo(() => computeConfigInsightBadgeWinners(data), [data])
 
@@ -45,32 +102,26 @@ export function ConfigInsightsPanel({ data }: { data: ConfigInsight[] }) {
   if (data.length === 0) {
     return (
       <section
-        className="cl-card"
-        aria-label="Config insights"
-        data-testid="config-insights"
+        className="cl-card cl-config-insights-bucket-panel"
+        aria-labelledby={headingId}
+        data-testid={bucketTestId}
       >
-        <h2>Config Insights</h2>
-        <p className="cl-muted">
-          From <code>analytics.config_insights</code> — per-pipeline performance, quality, cost, and
-          failures (sorted by traced runs).
-        </p>
-        <p className="cl-muted cl-empty-inline">No config insights yet.</p>
+        <h3 id={headingId}>{title}</h3>
+        <p className="cl-muted cl-empty-inline">No traced runs in this evaluator bucket yet.</p>
       </section>
     )
   }
 
   return (
     <section
-      className="cl-card"
-      aria-label="Config insights"
-      data-testid="config-insights"
+      className="cl-card cl-config-insights-bucket-panel"
+      aria-labelledby={headingId}
+      data-testid={bucketTestId}
     >
-      <h2>Config Insights</h2>
+      <h3 id={headingId}>{title}</h3>
       <p className="cl-muted">
-        From <code>analytics.config_insights</code> — compare pipeline configs on traced volume,
-        latency, scores, cost, and top failure type. Table sorted by <strong>traced runs</strong>{' '}
-        (desc). <strong>Row tint:</strong> fastest / highest relevance (purple); most failure-prone
-        by failed-run count (amber). Badges above summarize the same winners.
+        From <code>dashboard-analytics</code> — per-pipeline performance, quality, cost, and failures
+        (sorted by traced runs). Only runs whose evaluation row is in this bucket.
       </p>
 
       {hasBadgeRow ? (

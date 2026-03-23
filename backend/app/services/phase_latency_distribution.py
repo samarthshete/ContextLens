@@ -12,6 +12,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.analytics_run_scope import sqlalchemy_organic_run_clause
 from app.models import Run
 from app.schemas.dashboard_analytics import LatencyDistribution
 
@@ -25,6 +26,8 @@ def _f(v: object | None) -> float | None:
 async def get_phase_latency_distribution(
     session: AsyncSession,
     column: Any,
+    *,
+    exclude_benchmark_realism_runs: bool = False,
 ) -> LatencyDistribution:
     """Min/max/avg/median (P50)/P95 and count for one ``Run`` latency column.
 
@@ -39,6 +42,8 @@ async def get_phase_latency_distribution(
         func.percentile_cont(0.5).within_group(column).label("median_v"),
         func.percentile_cont(0.95).within_group(column).label("p95_v"),
     ).select_from(Run)
+    if exclude_benchmark_realism_runs:
+        stmt = stmt.where(sqlalchemy_organic_run_clause(Run))
     row = (await session.execute(stmt)).one()
     cnt = int(row.cnt)
     if cnt == 0:

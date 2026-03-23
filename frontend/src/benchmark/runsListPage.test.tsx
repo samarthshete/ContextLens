@@ -95,7 +95,7 @@ vi.mock('../api/client', async (importOriginal) => {
         end_to_end_run_latency_avg_sec: null,
         end_to_end_run_latency_p95_sec: null,
         failure_analysis: { overall_counts: {}, overall_percentages: {}, by_config: [], recent_failed_runs: [] },
-        config_insights: [],
+        config_insights: { heuristic: [], llm: [] },
       }),
       configComparison: vi.fn().mockResolvedValue({
         evaluator_type: 'both',
@@ -121,6 +121,10 @@ vi.mock('../api/client', async (importOriginal) => {
             completeness_delta_pct: null,
           },
         },
+        comparison_confidence: 'LOW',
+        comparison_statistically_reliable: false,
+        min_traced_runs_across_configs: 0,
+        recommended_min_traced_runs_for_valid_comparison: 20,
       }),
     },
   }

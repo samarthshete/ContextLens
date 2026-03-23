@@ -75,6 +75,11 @@ async def test_analytics_response_shape(analytics_client: AsyncClient):
     assert "end_to_end_run_latency_p95_sec" in body
     assert "failure_analysis" in body
     assert "config_insights" in body
+    ci = body["config_insights"]
+    assert isinstance(ci, dict)
+    assert "heuristic" in ci and "llm" in ci
+    assert isinstance(ci["heuristic"], list)
+    assert isinstance(ci["llm"], list)
 
     # time_series is a list
     assert isinstance(body["time_series"], list)
@@ -97,9 +102,6 @@ async def test_analytics_response_shape(analytics_client: AsyncClient):
     assert "overall_percentages" in fa
     assert "by_config" in fa
     assert "recent_failed_runs" in fa
-
-    # config_insights is a list
-    assert isinstance(body["config_insights"], list)
 
 
 @pytest.mark.asyncio
@@ -134,9 +136,10 @@ async def test_analytics_with_seeded_data(analytics_client: AsyncClient):
     assert fa["overall_counts"].get("RETRIEVAL_MISS", 0) >= 2
     assert "RETRIEVAL_MISS" in fa["overall_percentages"]
 
-    # config_insights should have entries
-    assert len(body["config_insights"]) >= 1
-    ci = body["config_insights"][0]
+    # config_insights.llm should have entries (seeded rows are LLM bucket)
+    llm_insights = body["config_insights"]["llm"]
+    assert len(llm_insights) >= 1
+    ci = llm_insights[0]
     assert "pipeline_config_id" in ci
     assert "pipeline_config_name" in ci
     assert "traced_runs" in ci
@@ -297,7 +300,7 @@ async def test_config_insights_avg_cost_is_per_run(analytics_client: AsyncClient
 
     resp = await analytics_client.get(f"{BASE}/runs/dashboard-analytics")
     assert resp.status_code == 200
-    ci_list = resp.json()["config_insights"]
+    ci_list = resp.json()["config_insights"]["llm"]
     # Find our config
     ci = next(c for c in ci_list if c["pipeline_config_id"] == pc_id)
     assert ci["avg_cost_usd"] == pytest.approx(0.20, abs=1e-6)
@@ -375,7 +378,7 @@ async def test_config_insights_null_cost_excluded_zero_preserved(analytics_clien
 
     resp = await analytics_client.get(f"{BASE}/runs/dashboard-analytics")
     assert resp.status_code == 200
-    ci = next(c for c in resp.json()["config_insights"] if c["pipeline_config_id"] == pc_id)
+    ci = next(c for c in resp.json()["config_insights"]["llm"] if c["pipeline_config_id"] == pc_id)
     # 3 runs: NULL, 0.0, 0.20 → avg of measured = (0.0 + 0.20) / 2 = 0.10
     assert ci["avg_cost_usd"] == pytest.approx(0.10, abs=1e-6)
     assert ci["total_cost_usd"] == pytest.approx(0.20, abs=1e-6)
@@ -390,7 +393,7 @@ async def test_config_insights_all_null_cost_returns_null(analytics_client: Asyn
 
     resp = await analytics_client.get(f"{BASE}/runs/dashboard-analytics")
     assert resp.status_code == 200
-    ci = next(c for c in resp.json()["config_insights"] if c["pipeline_config_id"] == pc_id)
+    ci = next(c for c in resp.json()["config_insights"]["llm"] if c["pipeline_config_id"] == pc_id)
     assert ci["avg_cost_usd"] is None
     assert ci["total_cost_usd"] is None
     assert ci["traced_runs"] == 1
@@ -403,3 +406,98 @@ async def test_analytics_endpoint_does_not_break_dashboard_summary(analytics_cli
     assert resp.status_code == 200
     body = resp.json()
     assert isinstance(body["total_runs"], int)
+
+
+async def _seed_run_with_eval(
+    session,
+    *,
+    pc: PipelineConfig,
+    completeness: float,
+    used_llm_judge: bool,
+    evaluator_type: str | None,
+    cost: float | None = None,
+):
+    ds = Dataset(name="mix_ds", description="")
+    session.add(ds)
+    await session.flush()
+    qc = QueryCase(dataset_id=ds.id, query_text="mix?", expected_answer=None)
+    session.add(qc)
+    await session.flush()
+    run = Run(
+        query_case_id=qc.id,
+        pipeline_config_id=pc.id,
+        status=STATUS_COMPLETED,
+        retrieval_latency_ms=10,
+        generation_latency_ms=20,
+        evaluation_latency_ms=30,
+        total_latency_ms=60,
+    )
+    session.add(run)
+    await session.flush()
+    meta = {"evaluator_type": evaluator_type} if evaluator_type else {}
+    session.add(
+        EvaluationResult(
+            run_id=run.id,
+            faithfulness=0.5,
+            completeness=completeness,
+            retrieval_relevance=0.5,
+            context_coverage=0.5,
+            failure_type="NO_FAILURE",
+            used_llm_judge=used_llm_judge,
+            metadata_json=meta or None,
+            cost_usd=cost,
+        )
+    )
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_config_insights_separate_evaluator_buckets_no_blended_scores(analytics_client: AsyncClient):
+    """Heuristic and LLM config_insights average scores only within each bucket."""
+    async with async_session_maker() as session:
+        pc = PipelineConfig(
+            name="mix_pc",
+            embedding_model="all-MiniLM-L6-v2",
+            chunk_strategy="fixed",
+            chunk_size=100,
+            chunk_overlap=0,
+            top_k=3,
+        )
+        session.add(pc)
+        await session.commit()
+        await session.refresh(pc)
+
+    async with async_session_maker() as session:
+        r_pc = await session.get(PipelineConfig, pc.id)
+        assert r_pc is not None
+        await _seed_run_with_eval(
+            session,
+            pc=r_pc,
+            completeness=0.10,
+            used_llm_judge=False,
+            evaluator_type="heuristic",
+        )
+    async with async_session_maker() as session:
+        r_pc = await session.get(PipelineConfig, pc.id)
+        assert r_pc is not None
+        await _seed_run_with_eval(
+            session,
+            pc=r_pc,
+            completeness=0.90,
+            used_llm_judge=True,
+            evaluator_type="llm",
+            cost=0.05,
+        )
+
+    resp = await analytics_client.get(f"{BASE}/runs/dashboard-analytics")
+    assert resp.status_code == 200
+    buckets = resp.json()["config_insights"]
+    h = next(c for c in buckets["heuristic"] if c["pipeline_config_id"] == pc.id)
+    l = next(c for c in buckets["llm"] if c["pipeline_config_id"] == pc.id)
+    assert h["traced_runs"] == 1
+    assert h["avg_completeness"] == pytest.approx(0.10, abs=1e-6)
+    assert l["traced_runs"] == 1
+    assert l["avg_completeness"] == pytest.approx(0.90, abs=1e-6)
+    # Blended average would be 0.50 — neither bucket should show that
+    assert h["avg_completeness"] != pytest.approx(0.50, abs=1e-3)
+    assert l["avg_completeness"] != pytest.approx(0.50, abs=1e-3)

@@ -47,7 +47,7 @@ ContextLens captures a **complete, structured trace** for every benchmark run an
 ### Evaluation Engine
 - **Heuristic mode** — retrieval relevance and context coverage, fully offline, no API key required
 - **LLM judge mode** — faithfulness, completeness, groundedness via OpenAI (default) or Anthropic; includes automatic retry on parse failure and structured observability metadata
-- **9-type failure taxonomy** — `NO_FAILURE`, `RETRIEVAL_MISS`, `RETRIEVAL_PARTIAL`, `CHUNK_FRAGMENTATION`, `CONTEXT_TRUNCATION`, `ANSWER_UNSUPPORTED`, `ANSWER_INCOMPLETE`, `MIXED_FAILURE`, `UNKNOWN`
+- **10-type failure taxonomy** — `NO_FAILURE`, `RETRIEVAL_MISS`, `RETRIEVAL_PARTIAL`, `CHUNK_FRAGMENTATION`, `CONTEXT_INSUFFICIENT`, `CONTEXT_TRUNCATION`, `ANSWER_UNSUPPORTED`, `ANSWER_INCOMPLETE`, `MIXED_FAILURE`, `UNKNOWN`
 - **Cost tracking** — generation + judge estimates with explicit `NULL` semantics (never a fake zero)
 
 ### Runs List & Queue Browser
@@ -79,8 +79,9 @@ ContextLens captures a **complete, structured trace** for every benchmark run an
 ┌─────────────────────▼───────────────────────────────────────┐
 │                 FastAPI  (async, Python)                     │
 │  POST /runs        GET /runs         GET /runs/:id           │
-│  GET /dashboard-analytics            GET /queue-status       │
-│  POST /requeue     Registry CRUD     GET /config-comparison  │
+│  GET /runs/dashboard-summary   GET /runs/dashboard-analytics │
+│  GET /queue-status   POST /requeue   GET /config-comparison  │
+│  Registry CRUD — datasets, query cases, pipeline configs       │
 └──────┬──────────────────┬───────────────────────┬───────────┘
        │                  │                        │
 ┌──────▼──────┐  ┌────────▼────────┐  ┌───────────▼──────────┐
@@ -135,8 +136,8 @@ Query × Config → Retrieve → LLM Generate → LLM Judge → Trace stored →
 - **Anthropic** (optional) — set `LLM_PROVIDER=anthropic` and `CLAUDE_API_KEY`
 
 ### Testing
-- **pytest** — 178 backend tests; deterministic fake embeddings in `conftest.py` for fully offline CI
-- **Vitest + React Testing Library** — 199 frontend unit/integration tests
+- **pytest** — 203 backend tests; deterministic fake embeddings in `conftest.py` for fully offline CI
+- **Vitest + React Testing Library** — 200 frontend unit/integration tests
 - **Playwright** — 14 E2E tests using `page.route()` API mocking; no backend required to run
 
 ---
@@ -287,7 +288,7 @@ Server-side filters (status, evaluator type, dataset, pipeline config) combined 
 
 ### 7. Test Suite
 
-178 backend pytest tests, 199 frontend Vitest tests, 14 Playwright E2E tests — all green. Backend tests run fully offline using deterministic fake embeddings. E2E tests use `page.route()` API mocking with no backend dependency.
+203 backend pytest tests, 200 frontend Vitest tests, 14 Playwright E2E tests — all green. Backend tests run fully offline using deterministic fake embeddings. E2E tests use `page.route()` API mocking with no backend dependency.
 
 ![Test suite](docs/images/test-suite.png)
 
@@ -300,12 +301,12 @@ Server-side filters (status, evaluator type, dataset, pipeline config) combined 
 | Common RAG demo | ContextLens |
 |-----------------|-------------|
 | Upload PDF → ask question → done | Full trace stored per run: chunks, scores, answer, latencies, cost |
-| No failure analysis | 9-type failure taxonomy applied and persisted on every run |
+| No failure analysis | 10-type failure taxonomy applied and persisted on every run |
 | Debugging by eyeballing | Deterministic diagnosis heuristics with explicit, readable output |
 | One config tested | Benchmark across configs; aggregate comparison with per-evaluator bucketing |
 | No operational visibility | Dashboard: 90-day trends, p95 latencies, per-config failure rates |
 | Evaluation = "looks right" | Dual-mode scoring with N/A vs zero semantics; no blended averages across evaluator types |
-| No test infrastructure | 391 automated tests across three layers with offline-capable fixtures |
+| No test infrastructure | 417 automated tests across three layers with offline-capable fixtures |
 
 The diagnosis layer is intentionally client-side: deterministic TypeScript logic over the existing run trace. No additional LLM calls, no new API contracts, fully testable in isolation.
 
@@ -313,7 +314,7 @@ The diagnosis layer is intentionally client-side: deterministic TypeScript logic
 
 ## Testing and Quality
 
-### Backend — 178 pytest tests
+### Backend — 203 pytest tests
 
 ```bash
 cd backend && pytest
@@ -323,7 +324,7 @@ Covers: document ingestion, retrieval, full RAG pipeline, heuristic + LLM judge 
 
 **Runs fully offline.** `backend/tests/conftest.py` replaces the `sentence-transformers` model with deterministic 384-dim L2-normalized fake vectors — no model download required for CI.
 
-### Frontend — 199 Vitest tests
+### Frontend — 200 Vitest tests
 
 ```bash
 cd frontend && npm run test

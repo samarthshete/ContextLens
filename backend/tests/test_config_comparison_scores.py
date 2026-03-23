@@ -5,7 +5,8 @@ import pytest
 pytestmark = pytest.mark.no_database_cleanup
 
 from app.schemas.config_comparison import ConfigComparisonMetrics
-from app.services.config_comparison import build_config_score_comparison
+from app.services.config_comparison import build_config_score_comparison, _realism_filter_sql
+from app.domain.analytics_run_scope import SQL_RUNS_R_EXCLUDE_BENCHMARK_REALISM
 
 
 def _m(
@@ -67,7 +68,7 @@ def test_missing_faithfulness_skips_faithfulness_rank():
     assert s.worst_config_completeness == 1
 
 
-def test_combined_mode_omits_faithfulness_but_keeps_completeness():
+def test_include_faithfulness_false_omits_faithfulness_but_keeps_completeness():
     s = build_config_score_comparison(
         [_m(1, faith=0.9, comp=0.1), _m(2, faith=0.2, comp=0.5)],
         include_faithfulness=False,
@@ -121,3 +122,11 @@ def test_sparse_samples_skips_zero_traced_configs():
     )
     assert s.best_config_faithfulness == 3
     assert s.worst_config_faithfulness == 2
+
+
+def test_realism_filter_sql_exclude_by_default():
+    assert _realism_filter_sql(False) == SQL_RUNS_R_EXCLUDE_BENCHMARK_REALISM
+
+
+def test_realism_filter_sql_include_returns_true():
+    assert _realism_filter_sql(True) == "TRUE"

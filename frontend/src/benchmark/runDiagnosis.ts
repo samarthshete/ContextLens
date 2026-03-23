@@ -310,6 +310,11 @@ export type DiagnosisSummaryLine = { key: string; text: string; severity: 'atten
 
 /** Explicit summary lines for taxonomy values that previously had no tailored copy (avoid a false “all clear”). */
 const FAILURE_TAXONOMY_SUMMARY: Partial<Record<string, DiagnosisSummaryLine>> = {
+  CONTEXT_INSUFFICIENT: {
+    key: 'failure-context-insufficient',
+    text: 'Failure type CONTEXT_INSUFFICIENT — retrieved chunks do not cover enough of the query (low context coverage vs query terms).',
+    severity: 'attention',
+  },
   RETRIEVAL_PARTIAL: {
     key: 'failure-retrieval-partial',
     text: 'Failure type RETRIEVAL_PARTIAL — some evidence was retrieved but it may be thin or not enough to answer reliably.',

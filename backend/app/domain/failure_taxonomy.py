@@ -14,6 +14,8 @@ class FailureType(StrEnum):
     RETRIEVAL_MISS = "RETRIEVAL_MISS"
     RETRIEVAL_PARTIAL = "RETRIEVAL_PARTIAL"
     CHUNK_FRAGMENTATION = "CHUNK_FRAGMENTATION"
+    # Heuristic: low context_coverage vs query (token recall in retrieved chunks).
+    CONTEXT_INSUFFICIENT = "CONTEXT_INSUFFICIENT"
     CONTEXT_TRUNCATION = "CONTEXT_TRUNCATION"
     ANSWER_UNSUPPORTED = "ANSWER_UNSUPPORTED"
     ANSWER_INCOMPLETE = "ANSWER_INCOMPLETE"
@@ -45,3 +47,13 @@ def normalize_failure_type(raw: str | None) -> str | None:
     if sup in aliases:
         return aliases[sup]
     return FailureType.UNKNOWN.value
+
+
+def failure_type_for_storage(raw: str | None) -> str:
+    """Persisted ``evaluation_results.failure_type`` must never be SQL NULL.
+
+    Empty / missing input maps to ``UNKNOWN`` (audit-safe). Callers that mean
+    "successful run" should pass ``NO_FAILURE`` explicitly (see heuristic eval).
+    """
+    ft = normalize_failure_type(raw)
+    return ft if ft is not None else FailureType.UNKNOWN.value

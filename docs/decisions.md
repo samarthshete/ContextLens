@@ -40,7 +40,7 @@ NULL means "not measured." Zero means "measured as zero." This distinction is en
 
 ## Failure Taxonomy
 
-9 canonical types defined in `app/domain/failure_taxonomy.py`. All persisted `failure_type` values pass through `normalize_failure_type()` — unknown labels become `UNKNOWN`.
+10 canonical types in `app/domain/failure_taxonomy.py` (including `CONTEXT_INSUFFICIENT` for weak query–context overlap under heuristic rules). All persisted `failure_type` values pass through `normalize_failure_type()` — unknown labels become `UNKNOWN`.
 
 ## Client-Side Diagnosis
 
@@ -58,6 +58,10 @@ Optional `CONTEXTLENS_WRITE_KEY` header gates non-GET requests. `APP_ENV=product
 
 Dashboard cost metrics use per-run subqueries (`SUM(cost_usd) GROUP BY run_id`) before averaging into daily or per-config buckets. This prevents inflation from join cardinality, even if the schema ever allows multiple evaluation rows per run.
 
+## Dashboard aggregates vs run list
+
+`GET /runs/dashboard-summary`, `GET /runs/dashboard-analytics`, `GET /runs/config-comparison`, and generated metrics from `aggregate.py` exclude runs tagged with `benchmark_realism` in `runs.metadata_json` (batch stress / realism experiments). The run list and run detail endpoints still return every stored run.
+
 ## Config Comparison
 
-Cross-config score comparison (`best_config_*`, `worst_config_*`, `delta_pct`) is computed within a single evaluator bucket. When `combine_evaluators=true`, faithfulness spread is omitted (NULL) because blending heuristic NULLs with LLM scores would be misleading.
+Cross-config score comparison (`best_config_*`, `worst_config_*`, `delta_pct`) is computed within a single evaluator bucket. Heuristic and LLM buckets are not merged in the API. Optional query params `dataset_id`, `min_traced_runs`, and `strict_comparison` enforce comparable samples (same dataset slice, minimum runs per config, identical query-case coverage when strict). Rows expose `stddev_samp_*` for key scores where measurable (PostgreSQL `STDDEV_SAMP`; null when n&lt;2).

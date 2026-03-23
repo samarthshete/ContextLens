@@ -7,7 +7,14 @@ from typing import Callable, Literal
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.benchmark_statistics import (
+    RECOMMENDED_MIN_TRACED_RUNS_FOR_VALID_COMPARISON,
+    comparison_statistically_reliable,
+    confidence_tier_from_min_traced_runs,
+)
+from app.domain.analytics_run_scope import SQL_RUNS_R_EXCLUDE_BENCHMARK_REALISM
 from app.domain.evaluator_bucket import sql_is_heuristic_bucket, sql_is_llm_bucket
+from app.domain.metric_display import round_metric_float
 from app.schemas.config_comparison import (
     ConfigComparisonMetrics,
     ConfigComparisonResponse,
@@ -15,6 +22,13 @@ from app.schemas.config_comparison import (
 )
 
 _MAX_CONFIG_IDS = 64
+
+_DATASET_FILTER = """
+  AND EXISTS (
+    SELECT 1 FROM query_cases qc_ds
+    WHERE qc_ds.id = r.query_case_id AND qc_ds.dataset_id = :dataset_id
+  )
+"""
 
 _MAIN_SQL = """
 SELECT
@@ -34,11 +48,19 @@ SELECT
   AVG(er.completeness)::double precision AS avg_completeness,
   AVG(er.retrieval_relevance)::double precision AS avg_retrieval_relevance,
   AVG(er.context_coverage)::double precision AS avg_context_coverage,
-  AVG(er.cost_usd::double precision)::double precision AS avg_evaluation_cost_per_run_usd
+  AVG(er.cost_usd::double precision)::double precision AS avg_evaluation_cost_per_run_usd,
+  STDDEV_SAMP(er.completeness)::double precision AS stddev_samp_completeness,
+  STDDEV_SAMP(er.faithfulness)::double precision AS stddev_samp_faithfulness,
+  STDDEV_SAMP(er.retrieval_relevance)::double precision AS stddev_samp_retrieval_relevance,
+  STDDEV_SAMP(er.context_coverage)::double precision AS stddev_samp_context_coverage,
+  STDDEV_SAMP(r.retrieval_latency_ms)::double precision AS stddev_samp_retrieval_latency_ms,
+  STDDEV_SAMP(r.total_latency_ms)::double precision AS stddev_samp_total_latency_ms
 FROM runs r
 INNER JOIN evaluation_results er ON er.run_id = r.id
 WHERE r.pipeline_config_id IN :pids
   AND EXISTS (SELECT 1 FROM retrieval_results rr WHERE rr.run_id = r.id)
+  AND {realism_filter}
+  {dataset_filter}
 {bucket_filter}
 GROUP BY r.pipeline_config_id
 """
@@ -46,15 +68,32 @@ GROUP BY r.pipeline_config_id
 _FAIL_SQL = """
 SELECT
   r.pipeline_config_id AS pipeline_config_id,
-  COALESCE(er.failure_type, '') AS failure_type,
+  COALESCE(NULLIF(BTRIM(er.failure_type::text), ''), 'UNKNOWN') AS failure_type,
   COUNT(*)::bigint AS cnt
 FROM runs r
 INNER JOIN evaluation_results er ON er.run_id = r.id
 WHERE r.pipeline_config_id IN :pids
   AND EXISTS (SELECT 1 FROM retrieval_results rr WHERE rr.run_id = r.id)
+  AND {realism_filter}
+  {dataset_filter}
 {bucket_filter}
-GROUP BY r.pipeline_config_id, COALESCE(er.failure_type, '')
+GROUP BY r.pipeline_config_id, COALESCE(NULLIF(BTRIM(er.failure_type::text), ''), 'UNKNOWN')
 """
+
+_QUERY_SET_SQL = """
+SELECT DISTINCT r.pipeline_config_id AS pipeline_config_id, r.query_case_id AS query_case_id
+FROM runs r
+INNER JOIN evaluation_results er ON er.run_id = r.id
+WHERE r.pipeline_config_id IN :pids
+  AND EXISTS (SELECT 1 FROM retrieval_results rr WHERE rr.run_id = r.id)
+  AND {realism_filter}
+  {dataset_filter}
+{bucket_filter}
+"""
+
+
+def _dataset_filter_sql(dataset_id: int | None) -> str:
+    return _DATASET_FILTER if dataset_id is not None else ""
 
 
 def _bucket_filter(bucket: Literal["llm", "heuristic"] | None) -> str:
@@ -69,6 +108,10 @@ def _float_or_none(v: object) -> float | None:
     if v is None:
         return None
     return float(v)
+
+
+def _metric_float(v: object) -> float | None:
+    return round_metric_float(_float_or_none(v))
 
 
 _SCORE_EPS = 1e-9
@@ -107,11 +150,7 @@ def build_config_score_comparison(
     *,
     include_faithfulness: bool,
 ) -> ConfigScoreComparisonSummary:
-    """Summarize best/worst configs by average faithfulness and completeness in this bucket.
-
-    When ``include_faithfulness`` is false (combined heuristic+LLM rows), faithfulness fields are
-    all ``None`` — do not blend judge faithfulness with heuristic nulls.
-    """
+    """Summarize best/worst configs by average faithfulness and completeness in this bucket."""
     bf: int | None = None
     wf: int | None = None
     faith_delta: float | None = None
@@ -130,21 +169,62 @@ def build_config_score_comparison(
     return ConfigScoreComparisonSummary(
         best_config_faithfulness=bf,
         worst_config_faithfulness=wf,
-        faithfulness_delta_pct=faith_delta,
+        faithfulness_delta_pct=round_metric_float(faith_delta),
         best_config_completeness=bc,
         worst_config_completeness=wc,
-        completeness_delta_pct=comp_delta,
+        completeness_delta_pct=round_metric_float(comp_delta),
     )
+
+
+def _comparison_confidence_fields(rows: list[ConfigComparisonMetrics]) -> dict:
+    if not rows:
+        return {
+            "comparison_confidence": "LOW",
+            "comparison_statistically_reliable": False,
+            "min_traced_runs_across_configs": 0,
+            "recommended_min_traced_runs_for_valid_comparison": RECOMMENDED_MIN_TRACED_RUNS_FOR_VALID_COMPARISON,
+        }
+    m = min(r.traced_runs for r in rows)
+    return {
+        "comparison_confidence": confidence_tier_from_min_traced_runs(m),
+        "comparison_statistically_reliable": comparison_statistically_reliable(m),
+        "min_traced_runs_across_configs": m,
+        "recommended_min_traced_runs_for_valid_comparison": RECOMMENDED_MIN_TRACED_RUNS_FOR_VALID_COMPARISON,
+    }
+
+
+def _exec_params(pids: list[int], dataset_id: int | None) -> dict:
+    out: dict = {"pids": pids}
+    if dataset_id is not None:
+        out["dataset_id"] = dataset_id
+    return out
+
+
+def _realism_filter_sql(include_benchmark_realism: bool) -> str:
+    if include_benchmark_realism:
+        return "TRUE"
+    return SQL_RUNS_R_EXCLUDE_BENCHMARK_REALISM
 
 
 async def _query_main(
     session: AsyncSession,
     pids: list[int],
     bucket: Literal["llm", "heuristic"] | None,
+    dataset_id: int | None,
+    include_benchmark_realism: bool = False,
 ) -> dict[int, dict]:
     bf = _bucket_filter(bucket)
-    stmt = text(_MAIN_SQL.format(bucket_filter=bf)).bindparams(bindparam("pids", expanding=True))
-    res = await session.execute(stmt, {"pids": pids})
+    ds = _dataset_filter_sql(dataset_id)
+    stmt = text(
+        _MAIN_SQL.format(
+            dataset_filter=ds,
+            bucket_filter=bf,
+            realism_filter=_realism_filter_sql(include_benchmark_realism),
+        )
+    ).bindparams(
+        bindparam("pids", expanding=True)
+    )
+    res = await session.execute(stmt, _exec_params(pids, dataset_id))
     return {int(row["pipeline_config_id"]): dict(row) for row in res.mappings()}
 
 
@@ -152,16 +232,81 @@ async def _query_failures(
     session: AsyncSession,
     pids: list[int],
     bucket: Literal["llm", "heuristic"] | None,
+    dataset_id: int | None,
+    include_benchmark_realism: bool = False,
 ) -> dict[int, dict[str, int]]:
     bf = _bucket_filter(bucket)
-    stmt = text(_FAIL_SQL.format(bucket_filter=bf)).bindparams(bindparam("pids", expanding=True))
-    res = await session.execute(stmt, {"pids": pids})
+    ds = _dataset_filter_sql(dataset_id)
+    stmt = text(
+        _FAIL_SQL.format(
+            dataset_filter=ds,
+            bucket_filter=bf,
+            realism_filter=_realism_filter_sql(include_benchmark_realism),
+        )
+    ).bindparams(
+        bindparam("pids", expanding=True)
+    )
+    res = await session.execute(stmt, _exec_params(pids, dataset_id))
     acc: dict[int, dict[str, int]] = {}
     for row in res.mappings():
         pid = int(row["pipeline_config_id"])
-        ft = row["failure_type"] if row["failure_type"] != "" else "(null)"
-        acc.setdefault(pid, {})[str(ft)] = int(row["cnt"])
+        ft = str(row["failure_type"])
+        acc.setdefault(pid, {})[ft] = int(row["cnt"])
     return acc
+
+
+async def _query_query_case_sets(
+    session: AsyncSession,
+    pids: list[int],
+    bucket: Literal["llm", "heuristic"] | None,
+    dataset_id: int | None,
+    include_benchmark_realism: bool = False,
+) -> dict[int, frozenset[int]]:
+    bf = _bucket_filter(bucket)
+    ds = _dataset_filter_sql(dataset_id)
+    stmt = text(
+        _QUERY_SET_SQL.format(
+            dataset_filter=ds,
+            bucket_filter=bf,
+            realism_filter=_realism_filter_sql(include_benchmark_realism),
+        )
+    ).bindparams(
+        bindparam("pids", expanding=True)
+    )
+    res = await session.execute(stmt, _exec_params(pids, dataset_id))
+    acc: dict[int, set[int]] = {pid: set() for pid in pids}
+    for row in res.mappings():
+        pid = int(row["pipeline_config_id"])
+        qid = int(row["query_case_id"])
+        acc.setdefault(pid, set()).add(qid)
+    return {pid: frozenset(acc.get(pid, set())) for pid in pids}
+
+
+def _enforce_integrity(
+    pids: list[int],
+    rows: list[ConfigComparisonMetrics],
+    query_sets: dict[int, frozenset[int]],
+    *,
+    min_traced_runs: int | None,
+    require_same_queries: bool,
+) -> None:
+    by_pid = {m.pipeline_config_id: m for m in rows}
+    if require_same_queries and len(pids) >= 2:
+        sets = [query_sets.get(pid, frozenset()) for pid in pids]
+        if len(set(sets)) > 1:
+            raise ValueError(
+                "comparison integrity: distinct query_case_id sets differ across pipeline configs "
+                f"(per-config query_case_ids: { {pid: sorted(query_sets.get(pid, frozenset())) for pid in pids} })"
+            )
+    if min_traced_runs is not None:
+        for pid in pids:
+            m = by_pid.get(pid)
+            tr = m.traced_runs if m is not None else 0
+            if tr < min_traced_runs:
+                raise ValueError(
+                    f"comparison integrity: pipeline_config_id={pid} has {tr} traced runs, "
+                    f"requires >= {min_traced_runs}"
+                )
 
 
 def _build_metrics_list(
@@ -187,19 +332,25 @@ def _build_metrics_list(
             ConfigComparisonMetrics(
                 pipeline_config_id=pid,
                 traced_runs=int(m["traced_runs"]),
-                avg_retrieval_latency_ms=_float_or_none(m.get("avg_retrieval_latency_ms")),
-                p95_retrieval_latency_ms=_float_or_none(m.get("p95_retrieval_latency_ms")),
-                avg_evaluation_latency_ms=_float_or_none(m.get("avg_evaluation_latency_ms")),
-                p95_evaluation_latency_ms=_float_or_none(m.get("p95_evaluation_latency_ms")),
-                avg_total_latency_ms=_float_or_none(m.get("avg_total_latency_ms")),
-                p95_total_latency_ms=_float_or_none(m.get("p95_total_latency_ms")),
-                avg_groundedness=_float_or_none(m.get("avg_groundedness")),
-                avg_faithfulness=_float_or_none(m.get("avg_faithfulness")),
-                avg_completeness=_float_or_none(m.get("avg_completeness")),
-                avg_retrieval_relevance=_float_or_none(m.get("avg_retrieval_relevance")),
-                avg_context_coverage=_float_or_none(m.get("avg_context_coverage")),
+                avg_retrieval_latency_ms=_metric_float(m.get("avg_retrieval_latency_ms")),
+                p95_retrieval_latency_ms=_metric_float(m.get("p95_retrieval_latency_ms")),
+                avg_evaluation_latency_ms=_metric_float(m.get("avg_evaluation_latency_ms")),
+                p95_evaluation_latency_ms=_metric_float(m.get("p95_evaluation_latency_ms")),
+                avg_total_latency_ms=_metric_float(m.get("avg_total_latency_ms")),
+                p95_total_latency_ms=_metric_float(m.get("p95_total_latency_ms")),
+                avg_groundedness=_metric_float(m.get("avg_groundedness")),
+                avg_faithfulness=_metric_float(m.get("avg_faithfulness")),
+                avg_completeness=_metric_float(m.get("avg_completeness")),
+                avg_retrieval_relevance=_metric_float(m.get("avg_retrieval_relevance")),
+                avg_context_coverage=_metric_float(m.get("avg_context_coverage")),
                 failure_type_counts=dict(fmap),
-                avg_evaluation_cost_per_run_usd=_float_or_none(m.get("avg_evaluation_cost_per_run_usd")),
+                avg_evaluation_cost_per_run_usd=_metric_float(m.get("avg_evaluation_cost_per_run_usd")),
+                stddev_samp_completeness=_metric_float(m.get("stddev_samp_completeness")),
+                stddev_samp_faithfulness=_metric_float(m.get("stddev_samp_faithfulness")),
+                stddev_samp_retrieval_relevance=_metric_float(m.get("stddev_samp_retrieval_relevance")),
+                stddev_samp_context_coverage=_metric_float(m.get("stddev_samp_context_coverage")),
+                stddev_samp_retrieval_latency_ms=_metric_float(m.get("stddev_samp_retrieval_latency_ms")),
+                stddev_samp_total_latency_ms=_metric_float(m.get("stddev_samp_total_latency_ms")),
             )
         )
     return out
@@ -209,37 +360,46 @@ async def compare_pipeline_configs(
     session: AsyncSession,
     pipeline_config_ids: list[int],
     *,
-    combine_evaluators: bool = False,
     evaluator_type: Literal["heuristic", "llm", "both"] = "both",
+    dataset_id: int | None = None,
+    min_traced_runs: int | None = None,
+    strict_comparison: bool = False,
+    include_benchmark_realism: bool = False,
 ) -> ConfigComparisonResponse:
     """Aggregate comparison metrics for the given config ids (order preserved).
 
-    Unless ``combine_evaluators`` is true, heuristic and LLM buckets are computed separately
-    when ``evaluator_type`` is ``both``.
+    Heuristic and LLM buckets are always computed separately when ``evaluator_type`` is ``both``.
+    Optional ``dataset_id`` restricts runs to that benchmark dataset's query cases.
+
+    ``strict_comparison`` requires ``dataset_id``, enforces identical ``query_case_id`` coverage
+    across all requested configs (within each bucket), and sets a default minimum of **2** traced
+    runs per config unless ``min_traced_runs`` is higher.
+
+    ``include_benchmark_realism``: when ``True``, runs tagged with
+    ``metadata_json.benchmark_realism`` are **included** in the comparison (default: excluded).
     """
-    pids = list(dict.fromkeys(pipeline_config_ids))  # stable unique
+    pids = list(dict.fromkeys(pipeline_config_ids))
     if not pids:
         raise ValueError("pipeline_config_ids must not be empty")
     if len(pids) > _MAX_CONFIG_IDS:
         raise ValueError(f"at most {_MAX_CONFIG_IDS} pipeline_config_ids allowed")
+    if strict_comparison and dataset_id is None:
+        raise ValueError("strict_comparison requires dataset_id")
 
-    if combine_evaluators:
-        main = await _query_main(session, pids, None)
-        fails = await _query_failures(session, pids, None)
-        rows = _build_metrics_list(pids, main, fails)
-        return ConfigComparisonResponse(
-            evaluator_type="combined",
-            pipeline_config_ids=pids,
-            configs=rows,
-            buckets=None,
-            score_comparison=build_config_score_comparison(rows, include_faithfulness=False),
-            score_comparison_buckets=None,
-        )
+    effective_min: int | None = min_traced_runs
+    if strict_comparison:
+        effective_min = max(2, min_traced_runs or 2)
+    require_same_q = strict_comparison
+
+    ibr = include_benchmark_realism
 
     if evaluator_type == "heuristic":
-        main = await _query_main(session, pids, "heuristic")
-        fails = await _query_failures(session, pids, "heuristic")
+        qsets = await _query_query_case_sets(session, pids, "heuristic", dataset_id, ibr)
+        main = await _query_main(session, pids, "heuristic", dataset_id, ibr)
+        fails = await _query_failures(session, pids, "heuristic", dataset_id, ibr)
         rows = _build_metrics_list(pids, main, fails)
+        _enforce_integrity(pids, rows, qsets, min_traced_runs=effective_min, require_same_queries=require_same_q)
+        conf = _comparison_confidence_fields(rows)
         return ConfigComparisonResponse(
             evaluator_type="heuristic",
             pipeline_config_ids=pids,
@@ -247,12 +407,19 @@ async def compare_pipeline_configs(
             buckets=None,
             score_comparison=build_config_score_comparison(rows, include_faithfulness=True),
             score_comparison_buckets=None,
+            dataset_id=dataset_id,
+            strict_comparison_applied=strict_comparison,
+            min_traced_runs_enforced=effective_min,
+            **conf,
         )
 
     if evaluator_type == "llm":
-        main = await _query_main(session, pids, "llm")
-        fails = await _query_failures(session, pids, "llm")
+        qsets = await _query_query_case_sets(session, pids, "llm", dataset_id, ibr)
+        main = await _query_main(session, pids, "llm", dataset_id, ibr)
+        fails = await _query_failures(session, pids, "llm", dataset_id, ibr)
         rows = _build_metrics_list(pids, main, fails)
+        _enforce_integrity(pids, rows, qsets, min_traced_runs=effective_min, require_same_queries=require_same_q)
+        conf = _comparison_confidence_fields(rows)
         return ConfigComparisonResponse(
             evaluator_type="llm",
             pipeline_config_ids=pids,
@@ -260,15 +427,23 @@ async def compare_pipeline_configs(
             buckets=None,
             score_comparison=build_config_score_comparison(rows, include_faithfulness=True),
             score_comparison_buckets=None,
+            dataset_id=dataset_id,
+            strict_comparison_applied=strict_comparison,
+            min_traced_runs_enforced=effective_min,
+            **conf,
         )
 
-    # both buckets, separate rows
-    main_h = await _query_main(session, pids, "heuristic")
-    fail_h = await _query_failures(session, pids, "heuristic")
-    main_l = await _query_main(session, pids, "llm")
-    fail_l = await _query_failures(session, pids, "llm")
+    main_h = await _query_main(session, pids, "heuristic", dataset_id, ibr)
+    fail_h = await _query_failures(session, pids, "heuristic", dataset_id, ibr)
+    main_l = await _query_main(session, pids, "llm", dataset_id, ibr)
+    fail_l = await _query_failures(session, pids, "llm", dataset_id, ibr)
     list_h = _build_metrics_list(pids, main_h, fail_h)
     list_l = _build_metrics_list(pids, main_l, fail_l)
+    qs_h = await _query_query_case_sets(session, pids, "heuristic", dataset_id, ibr)
+    qs_l = await _query_query_case_sets(session, pids, "llm", dataset_id, ibr)
+    _enforce_integrity(pids, list_h, qs_h, min_traced_runs=effective_min, require_same_queries=require_same_q)
+    _enforce_integrity(pids, list_l, qs_l, min_traced_runs=effective_min, require_same_queries=require_same_q)
+    conf = _comparison_confidence_fields(list_h + list_l)
     return ConfigComparisonResponse(
         evaluator_type="both",
         pipeline_config_ids=pids,
@@ -282,4 +457,8 @@ async def compare_pipeline_configs(
             "heuristic": build_config_score_comparison(list_h, include_faithfulness=True),
             "llm": build_config_score_comparison(list_l, include_faithfulness=True),
         },
+        dataset_id=dataset_id,
+        strict_comparison_applied=strict_comparison,
+        min_traced_runs_enforced=effective_min,
+        **conf,
     )

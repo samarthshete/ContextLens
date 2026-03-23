@@ -6,9 +6,11 @@ FastAPI backend for the ContextLens RAG evaluation and debugging platform.
 
 ```bash
 pip install -e ".[dev]"
-alembic upgrade head
+alembic upgrade head   # includes 0007: runs.metadata_json (batch / experiment tags)
 uvicorn app.main:app --reload --port 8002
 ```
+
+**Batch experiments:** `app.services.batch_runner.run_batch_benchmark(...)` schedules many runs with a shared `batch_id` in `runs.metadata_json`. **CLI:** `python scripts/run_batch_benchmark.py --help`. Same migration **0007** applies.
 
 Set **`OPENAI_API_KEY`** (and **`LLM_PROVIDER=openai`**, default) for **`eval_mode=full`**. For **Anthropic**, set **`LLM_PROVIDER=anthropic`** and **`CLAUDE_API_KEY`**. Env template: **`backend/.env.example`** or repo root **`.env.example`**.
 

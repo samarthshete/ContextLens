@@ -125,26 +125,29 @@ function tinyAnalytics(): DashboardAnalyticsResponse {
       by_config: [],
       recent_failed_runs: [],
     },
-    config_insights: [
-      {
-        pipeline_config_id: 9,
-        pipeline_config_name: 'cfg"a',
-        traced_runs: 3,
-        completed_runs: 2,
-        failed_runs: 1,
-        avg_total_latency_ms: 50,
-        min_total_latency_ms: 40,
-        max_total_latency_ms: 60,
-        avg_cost_usd: 0.01,
-        total_cost_usd: 0.03,
-        avg_retrieval_relevance: 0.5,
-        avg_context_coverage: 0.6,
-        avg_completeness: 0.7,
-        avg_faithfulness: null,
-        latest_run_at: '2026-03-20T00:00:00Z',
-        top_failure_type: 'UNKNOWN',
-      },
-    ],
+    config_insights: {
+      heuristic: [],
+      llm: [
+        {
+          pipeline_config_id: 9,
+          pipeline_config_name: 'cfg"a',
+          traced_runs: 3,
+          completed_runs: 2,
+          failed_runs: 1,
+          avg_total_latency_ms: 50,
+          min_total_latency_ms: 40,
+          max_total_latency_ms: 60,
+          avg_cost_usd: 0.01,
+          total_cost_usd: 0.03,
+          avg_retrieval_relevance: 0.5,
+          avg_context_coverage: 0.6,
+          avg_completeness: 0.7,
+          avg_faithfulness: null,
+          latest_run_at: '2026-03-20T00:00:00Z',
+          top_failure_type: 'UNKNOWN',
+        },
+      ],
+    },
   }
 }
 
@@ -238,7 +241,8 @@ describe('exportDownload', () => {
     expect(csv).toContain('end_to_end_run_latency_p95_sec,0.11')
     expect(csv).toContain('section,time_series_daily')
     expect(csv).toContain('2026-03-20')
-    expect(csv).toContain('section,config_insights')
+    expect(csv).toContain('section,config_insights_heuristic')
+    expect(csv).toContain('section,config_insights_llm')
     expect(csv).toContain('cfg""a')
     expect(csv).not.toContain('section,recent_runs')
   })
