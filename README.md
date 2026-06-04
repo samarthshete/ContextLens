@@ -1,418 +1,189 @@
-# ContextLens — RAG Evaluation and Debugging Platform
+# ContextLens
 
-> **ContextLens helps developers understand *why* a RAG system failed, not just that it failed.**
+ContextLens is a RAG evaluation and debugging platform for understanding why retrieval-augmented generation runs succeed or fail.
 
-Most retrieval-augmented generation projects stop at "upload a PDF and ask a question." ContextLens goes further: it instruments every stage of the pipeline, stores the full trace, evaluates output quality with a structured taxonomy, and gives you the tools to diagnose, compare, and iterate — without guessing.
+Instead of stopping at document upload and question answering, ContextLens captures the trace around each run: query, pipeline config, retrieved chunks, generated answer, latency fields, evaluation result, failure type, and comparison data.
 
----
+## Problem Solved
 
-## The Problem
+RAG systems can fail for different reasons that look similar from the outside:
 
-RAG systems fail silently and in multiple ways. When a system returns a wrong or incomplete answer, the cause could be:
+- The retriever missed the relevant passage.
+- The right context was split across chunks.
+- Context was present but the answer was incomplete.
+- The model generated content not supported by retrieved context.
+- A full-mode run failed because of infrastructure or queue issues.
 
-- **Retrieval miss** — the relevant passage was never retrieved
-- **Chunk fragmentation** — the answer is split across chunks that don't connect
-- **Context truncation** — relevant content was cut before reaching the model
-- **Unsupported generation** — the model invented content not present in context
-- **Incomplete answer** — context was present but the model missed part of it
-
-Without instrumentation, debugging requires manually inspecting retrieval logs, re-running queries under different configs, and relying on intuition. That process doesn't scale across datasets, pipeline configurations, or teams.
-
----
-
-## The Solution
-
-ContextLens captures a **complete, structured trace** for every benchmark run and provides four layers of analysis:
-
-| Layer | What it gives you |
-|-------|-------------------|
-| **Trace capture** | Query, config, retrieved chunks, generated answer, latencies, tokens, cost — persisted per run |
-| **Evaluation** | Heuristic scoring (fast, offline) or LLM-as-judge (faithfulness, completeness, groundedness) |
-| **Diagnosis** | Deterministic, explainable failure summaries — no extra LLM calls |
-| **Comparison** | Side-by-side run diff and aggregate config comparison across benchmark datasets |
-| **Observability** | Dashboard with time series trends, latency distributions, failure breakdowns, config insights, and comparison reliability gating |
-
----
+ContextLens turns those cases into inspectable traces, evaluation rows, dashboard summaries, and run comparisons.
 
 ## Key Features
 
-### Run Detail & Diagnosis
-- **Diagnosis summary** — identifies the most likely failure cause from retrieval + context + evaluation signals
-- **Phase timeline** — proportional bars showing where time was spent (retrieval / generation / evaluation), with dominant-phase callout
-- **Retrieval inspection** — per-chunk scores, ranks, and source document labels for immediate provenance
-- **Context quality analysis** — detects thin chunks, prefix overlap between consecutive hits, and single-document concentration
-- **Generation & judge insights** — token usage, model, cost estimate, and LLM judge parse-quality badges
-- **Run diff** — enter any second run ID to get a per-metric comparison table with `improved` / `worse` / `same` verdicts
-
-### Evaluation Engine
-- **Heuristic mode** — retrieval relevance and context coverage, fully offline, no API key required
-- **LLM judge mode** — faithfulness, completeness, groundedness via OpenAI (default) or Anthropic; includes automatic retry on parse failure and structured observability metadata
-- **10-type failure taxonomy** — `NO_FAILURE`, `RETRIEVAL_MISS`, `RETRIEVAL_PARTIAL`, `CHUNK_FRAGMENTATION`, `CONTEXT_INSUFFICIENT`, `CONTEXT_TRUNCATION`, `ANSWER_UNSUPPORTED`, `ANSWER_INCOMPLETE`, `MIXED_FAILURE`, `UNKNOWN`
-- **Cost tracking** — generation + judge estimates with explicit `NULL` semantics (never a fake zero)
-
-### Runs List & Queue Browser
-- **Search and filter** — server-side filters by status, evaluator type, dataset, and pipeline config; labeled client-side narrowing on loaded rows
-- **Queue browser** (`/queue`) — merged view of pending/running/failed runs with on-demand queue-status inspection and one-click requeue for eligible full runs
-
-### Dashboard
-- **Dataset-scoped analytics** — Summary and analytics default to the **latest benchmark dataset** (by `created_at`) in the UI; you can switch datasets with the selector. APIs: `GET /api/v1/runs/dashboard-summary?dataset_id=` and `GET /api/v1/runs/dashboard-analytics?dataset_id=` (optional; when omitted, run-derived metrics use all organic runs). Unknown `dataset_id` → **404**. Corpus counters (`documents processed`, `chunks indexed`) stay **global**; everything else that comes from `runs` / evaluations respects the selected dataset.
-- **Run counts** — **System failures** = runs whose `status` is `failed` (pipeline errors / retries). **Model failures** = evaluation rows with `failure_type` other than `NO_FAILURE` (e.g. `RETRIEVAL_PARTIAL`, `ANSWER_INCOMPLETE`); a run can be `completed` and still count here.
-- **90-day trend chart** — daily run volume stacked by `status` (completed / system-failed / other)
-- **Latency** — Summary card lists **median (P50) → P95 → mean** (mean de-emphasized) for retrieval and end-to-end total; API exposes `total_latency_p50_ms` / `end_to_end_run_latency_p50_sec` alongside existing mean/P95. Copy explains cold-start skew (median more representative than average).
-- **Latency distribution** — Per phase: **&lt;5** non-null samples → only *“Insufficient samples for distribution (N runs)”* (no percentile table for that phase). **≥5** → bars + table (median before P95 before mean). Section **skew warning** + median-vs-average note. Phases with **≥5** but **&lt;20** samples get a **Low sample — not reliable** badge; **P95/median &gt; 10** → **High variance (skewed distribution)** badge.
-- **Failure breakdown** — evaluation `failure_type` histograms (excluding `NO_FAILURE`); **recent system-failed runs** = `status` failed only
-- **Config insights** — per-pipeline scores, cost, and top evaluation failure label; **heuristic** vs **LLM** tables stay separate. **LLM gating:** `llm_runs` **&lt; 3** → sparse warning only (hides LLM cost block, LLM compare bucket, LLM config-insights table); **3–9** → illustrative “limited evidence” copy where applicable. Tradeoff note: lower `top_k` tends to improve retrieval precision; higher `top_k` improves context coverage but adds noise.
-- **Config comparison reliability** — `comparison_confidence` (LOW / MEDIUM / HIGH) based on `effective_sample_size = min(unique queries across compared configs)`; thresholds <8 → LOW, <15 → MEDIUM, ≥15 → HIGH. A `repeated_sampling_note` is surfaced when the same queries were run multiple times. `comparison_statistically_reliable: false` unless ≥10 unique queries per config. These gates appear as banners in the comparison panel — not buried in JSON.
-
-## Benchmark Reality and Limitations
-
-- Current benchmark: **49 runs across 6 unique queries (repeated sampling)**
-- Effective sample size: **6 queries**
-- Config comparison confidence: **LOW (directional only)**
-- Dominant failure mode: **retrieval-related (e.g. RETRIEVAL_PARTIAL)**
-### LLM Evaluation Insight
-
-LLM-based evaluation demonstrates both:
-- **Correct grounded responses** when relevant context is retrieved
-- **Retrieval-miss failures**, where the model correctly abstains when context is insufficient
-
-Due to limited sample size, these results are used for qualitative validation rather than statistical conclusions.
-- Latency: **highly skewed due to local execution and cold-start effects; median more reliable than average**
-
-This system is designed to surface failure patterns and tradeoffs, not to claim production-grade performance metrics.
-
-### Infrastructure
-- **Durable full-mode pipeline** — full RAG runs (generation + LLM judge) enqueued via Redis + RQ; survive API restarts; stale-lock reconciliation; one-click requeue
-- **Benchmark registry** — full CRUD for datasets, query cases, and pipeline configs from the UI
-- **Document upload** — PDF, TXT, Markdown via the Run tab; parsed, chunked, embedded, and stored in one request
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│              React + Vite + TypeScript (SPA)                │
-│  /benchmark  /runs  /runs/:runId  /compare  /dashboard      │
-│  /queue                                                      │
-└─────────────────────┬───────────────────────────────────────┘
-                      │  Vite proxy  /api → :8002
-┌─────────────────────▼───────────────────────────────────────┐
-│                 FastAPI  (async, Python)                     │
-│  POST /runs        GET /runs         GET /runs/:id           │
-│  GET /runs/dashboard-summary?dataset_id=   GET /runs/dashboard-analytics?dataset_id= │
-│  GET /queue-status   POST /requeue   GET /config-comparison  │
-│  Registry CRUD — datasets, query cases, pipeline configs       │
-└──────┬──────────────────┬───────────────────────┬───────────┘
-       │                  │                        │
-┌──────▼──────┐  ┌────────▼────────┐  ┌───────────▼──────────┐
-│ PostgreSQL  │  │   Redis + RQ    │  │  OpenAI / Anthropic  │
-│ + pgvector  │  │  (full runs)    │  │  (gen + LLM judge)   │
-│  HNSW idx   │  │  Worker proc.   │  │                      │
-└─────────────┘  └─────────────────┘  └──────────────────────┘
-```
-
-**Ingest path:**
-```
-Upload → Parse → Fixed/Recursive Chunk → Embed (MiniLM 384-dim) → pgvector
-```
-
-**Benchmark path — heuristic:**
-```
-Query × Config → Retrieve top-k → Heuristic eval → Trace stored → completed
-```
-
-**Benchmark path — full RAG:**
-```
-Query × Config → Retrieve → LLM Generate → LLM Judge → Trace stored → completed
-                              (enqueued via RQ; durable across API restarts)
-```
-
-**Client-side diagnosis layer** is an intentional architectural decision: the diagnosis, diff, timeline, and source-label features are deterministic TypeScript logic over the existing `GET /runs/{id}` payload. No new backend contracts were needed — the trace is already complete.
-
----
+- Document upload for PDF, TXT, and Markdown.
+- Fixed and recursive chunking options.
+- Local embeddings with PostgreSQL/pgvector storage.
+- Heuristic evaluation mode for offline scoring.
+- Full RAG mode with provider-backed generation and judge evaluation.
+- Redis + RQ queue for durable full-mode benchmark runs.
+- Run detail view with retrieval hits, diagnosis, timeline, and run diff.
+- Dashboard analytics for run counts, latency distributions, failure breakdowns, and config comparison confidence.
+- Dataset, query case, and pipeline config registry.
+- Backend, frontend, and E2E test suites documented in the repo.
 
 ## Tech Stack
 
-### Backend
-- **FastAPI** — async HTTP layer, typed route handlers
-- **SQLAlchemy** (async) — ORM + query layer
-- **Alembic** — sole source of DB schema (no `create_all` in production)
-- **psycopg** — sync adapter used in RQ failure callbacks to avoid event-loop conflicts
+| Area | Technology |
+|---|---|
+| Backend | FastAPI, SQLAlchemy async, Alembic, Pydantic settings |
+| Frontend | React, TypeScript, Vite, React Router |
+| Data | PostgreSQL 16, pgvector, HNSW index |
+| Queue | Redis, RQ worker |
+| AI / Evaluation | sentence-transformers, provider-backed generation and judge modes |
+| Testing | pytest, Vitest, React Testing Library, Playwright |
+| DevOps | Docker Compose |
 
-### Frontend
-- **React 18** + **TypeScript** — component-based SPA
-- **Vite** — dev server with `/api` proxy; `vite preview` used for E2E tests
-- **React Router DOM** — `BrowserRouter`; URL is source of truth for all view state
-- **CSS component tokens** — lightweight, no charting library dependency
+## Architecture
 
-### Database / Infrastructure
-- **PostgreSQL 16** + **pgvector** — vector storage with HNSW cosine index
-- **Redis** + **RQ** — durable job queue for full-mode benchmark runs
-- **Docker Compose** — single command starts `db`, `redis`, `backend`, `worker`
+```text
+React + Vite SPA
+   |
+   | /api proxy
+   v
+FastAPI backend
+   |        |            |
+   |        |            +--> Provider-backed generation / judge mode
+   |        +--> Redis + RQ worker for queued full runs
+   |
+   +--> PostgreSQL + pgvector
+```
 
-### AI / Evaluation
-- **sentence-transformers** (`all-MiniLM-L6-v2`, 384-dim, L2-normalized) — local embeddings, no API key required
-- **OpenAI** (default) — generation via Responses API; LLM judge via Chat Completions + JSON mode
-- **Anthropic** (optional) — set `LLM_PROVIDER=anthropic` and `CLAUDE_API_KEY`
+Ingest path:
 
-### Testing
-- **pytest** — 215 backend tests; deterministic fake embeddings in `conftest.py` for fully offline CI
-- **Vitest + React Testing Library** — 227 frontend unit/integration tests
-- **Playwright** — 14 E2E tests using `page.route()` API mocking; no backend required to run
+```text
+Upload -> Parse -> Chunk -> Embed -> Store chunks in pgvector
+```
 
----
+Benchmark path:
 
-## Local Setup
+```text
+Query + config -> Retrieve chunks -> Evaluate -> Persist trace -> Dashboard / run detail
+```
 
-### Prerequisites
+Full-mode path:
+
+```text
+Query + config -> Queue job -> Retrieve -> Generate -> Judge -> Persist trace
+```
+
+## Project Structure
+
+```text
+ContextLens/
+|-- backend/          # FastAPI app, models, migrations, scripts, pytest tests
+|-- frontend/         # React/Vite UI, unit tests, Playwright specs
+|-- docs/             # Architecture, decisions, deployment, benchmark notes
+|-- docker-compose.yml
+|-- .env.example
+`-- README.md
+```
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and keep real secrets local.
+
+Important variables:
+
+```env
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5433/contextlens
+REDIS_URL=redis://localhost:6379/0
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+LLM_PROVIDER=<provider-name>
+OPENAI_API_KEY=
+CLAUDE_API_KEY=
+EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
+GENERATION_MODEL_NAME=<generation-model>
+EVALUATION_MODEL_NAME=<evaluation-model>
+```
+
+Heuristic mode does not require an external LLM key. Full mode requires the provider key matching the configured provider.
+
+## Run Locally
+
+Prerequisites:
+
 - Docker and Docker Compose
 - Node.js 18+
 - Python 3.11+
 
-### 1. Clone
-
 ```bash
-git clone https://github.com/your-username/contextlens.git
-cd contextlens
-```
-
-### 2. Configure environment
-
-```bash
+git clone https://github.com/samarthshete/ContextLens.git
+cd ContextLens
 cp .env.example .env
-# Edit .env and set:
-#   DATABASE_URL
-#   OPENAI_API_KEY     (required for eval_mode=full; not needed for heuristic)
-#   LLM_PROVIDER=openai  (default; set to 'anthropic' + CLAUDE_API_KEY to use Anthropic)
-```
-
-### 3. Start infrastructure
-
-```bash
-# Start everything: db, redis, backend API, and RQ worker
 docker compose up --build -d
-
-# Run migrations
 docker compose exec backend alembic upgrade head
 ```
 
-> **Note:** `backend` and `worker` share the same image. `docker compose up --build` builds once and updates both. After changing `pyproject.toml`, rebuild with `docker compose build --no-cache`.
-
-### 4. Seed benchmark data
+Seed and run a heuristic benchmark:
 
 ```bash
 docker compose exec backend python scripts/seed_benchmark.py
 docker compose exec backend python scripts/run_benchmark.py --eval-mode heuristic
 ```
 
-For full RAG runs (LLM generation + judge):
-
-```bash
-docker compose exec backend python scripts/run_benchmark.py --eval-mode full
-```
-
-### 5. Frontend
+Start the frontend:
 
 ```bash
 cd frontend
 npm install
 npm run dev
-# Open http://localhost:5173
 ```
 
-Vite proxies `/api` → `http://127.0.0.1:8002`. Override in `frontend/.env.development.local` if your API is on a different port (see `frontend/.env.example`).
+Open http://localhost:5173.
 
-### 6. Optional: local backend (without Docker)
+## Testing
+
+Backend:
 
 ```bash
 cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-alembic upgrade head
-uvicorn app.main:app --reload --port 8002
+pytest
 ```
 
-> Use **one** backend at a time — either local uvicorn **or** Docker Compose backend, not both on port 8002.
-
----
-
-## Example Workflow
-
-1. **Upload a document** — drag a PDF, TXT, or Markdown file into the Run tab. The backend parses, chunks, embeds, and stores it in one request.
-
-2. **Create registry entries** — add a dataset, write a query case (with optional reference answer), and define a pipeline config (chunking strategy, top-k, embedding model).
-
-3. **Execute a benchmark run** — pick dataset → query case → pipeline config → click **Run**. Heuristic mode completes inline. Full mode enqueues to Redis and the UI polls for progress.
-
-4. **Inspect the dashboard** — navigate to `/dashboard` to see 90-day run trends, latency distributions by phase, failure type breakdowns, and per-config score summaries.
-
-5. **Open a run** — click any row in the Recent Runs list or navigate directly to `/runs/42`. The run detail view loads the full trace.
-
-6. **Read the diagnosis** — the Diagnosis Summary identifies the most likely failure cause. The Phase Timeline shows where time was spent. Retrieval Hits show each chunk with its source document label and score.
-
-7. **Compare runs** — in the Run Diff panel, enter a second run ID and click **Load comparison** to see a per-metric table with improvement verdicts. Useful for comparing two pipeline configs on the same query.
-
-8. **Check the queue** — navigate to `/queue` to see all pending, running, and failed full-mode runs. Click **Queue status** on any row for Redis lock and RQ job state. Use **Requeue** if a run is stuck after a worker failure.
-
----
-
-## Screenshots
-
-### 1. Run Workflow Entry
-
-Dataset selector, query case, pipeline config, corpus scope, document upload, and eval mode — the complete benchmark entry point in one panel.
-
-![Run workflow entry](docs/images/run-workflow.png)
-
----
-
-### 2. Run Detail — Phase Timeline & Diagnosis
-
-Phase timeline with proportional bars, dominant-phase callout (retrieval: 99.9% of 1.3 s here), and a one-line run diagnosis summary. Evaluator, status, and export JSON all in a single view.
-
-![Run diagnosis](docs/images/run-diagnosis.png)
-
----
-
-### 3. Retrieval Source Inspection
-
-Every retrieved chunk shows its rank, cosine similarity score, source document label (linked to `/documents/:id`), and text preview. A diversity note surfaces when all hits originate from the same document.
-
-![Retrieval hits with source labels](docs/images/run-retrieval-hits.png)
-
----
-
-### 4. LLM Evaluation Scores
-
-Full-RAG run with gpt-4o-mini: faithfulness, completeness, retrieval relevance, context coverage, and groundedness all at 1.000 — `NO_FAILURE` — with measured cost ($0.000169) and parse/retry metadata.
-
-![LLM evaluation scores](docs/images/run-llm-scores.png)
-
----
-
-### 5. Run Diff
-
-Side-by-side comparison of two runs — LLM (NO_FAILURE, all scores 1.0) vs heuristic (ANSWER_INCOMPLETE). Each metric row is labeled `same`, `worse`, or `improved`. Useful for measuring pipeline config impact on identical queries.
-
-![Run diff](docs/images/run-diff.png)
-
----
-
-### 6. Runs List with Filters
-
-Server-side filters (status, evaluator type, dataset, pipeline config) plus labeled client-side row narrowing on the loaded page. 173 total runs shown; every row opens the run detail view directly.
-
-![Runs list with filters](docs/images/runs-list.png)
-
----
-
-### 7. Dashboard — Scale & Run Counts
-
-Observable dataset scope: 49 total runs, 6 unique queries, 2 configs, LLM eval rows = 1 (sparse — not reliable). System failures vs model failures distinguished. `repeated_sampling_note` visible.
-
-![Dashboard overview](docs/images/dashboard-overview.png)
-
----
-
-### 8. Dashboard — Latency Distribution
-
-Per-phase latency with skew warning banner, median-before-P95-before-mean ordering, and sparse-LLM gate. Cold-start caveat is explicit: these numbers are directional, not SLA measurements.
-
-![Dashboard latency](docs/images/dashboard-latency.png)
-
----
-
-### 9. Dashboard — Failure Breakdown
-
-`failure_type` histograms from evaluation rows (not run status). `RETRIEVAL_PARTIAL` dominates at 28 of 34 failures. Per-config breakdown shows which pipeline contributes each failure type.
-
-![Dashboard failure breakdown](docs/images/dashboard-failures.png)
-
----
-
-### 10. Dashboard — Config Comparison
-
-Effective sample size: 6 unique queries → `comparison_confidence: LOW`. Reliability gate banner shown. Heuristic bucket scores visible; LLM bucket flagged sparse (1 run — not reliable).
-
-![Dashboard config comparison](docs/images/dashboard-config-comparison.png)
-
----
-
-## Why This Project Is Different
-
-**This is not a chatbot wrapper.** There is no public "ask a question, get an answer" endpoint. The generation path exists exclusively on the benchmark/evaluation pipeline to support systematic experimentation and measurement.
-
-| Common RAG demo | ContextLens |
-|-----------------|-------------|
-| Upload PDF → ask question → done | Full trace stored per run: chunks, scores, answer, latencies, cost |
-| No failure analysis | 10-type failure taxonomy applied and persisted on every run |
-| Debugging by eyeballing | Deterministic diagnosis heuristics with explicit, readable output |
-| One config tested | Benchmark across configs; aggregate comparison with per-evaluator bucketing |
-| No operational visibility | Dashboard: 90-day trends, p95 latencies, per-config failure rates |
-| Evaluation = "looks right" | Dual-mode scoring with N/A vs zero semantics; no blended averages across evaluator types |
-| No test infrastructure | 456 automated tests across three layers (215 backend + 227 frontend + 14 E2E) with offline-capable fixtures |
-
-The diagnosis layer is intentionally client-side: deterministic TypeScript logic over the existing run trace. No additional LLM calls, no new API contracts, fully testable in isolation.
-
----
-
-## Testing and Quality
-
-### Backend — 215 pytest tests
-
-```bash
-cd backend && pytest
-```
-
-Covers: document ingestion, retrieval, full RAG pipeline, heuristic + LLM judge evaluation, failure taxonomy normalization, run lifecycle, requeue, queue-status, dashboard summary, dashboard analytics, config comparison (confidence tiers, effective sample size), registry CRUD, cost estimation, stale-lock reconciliation, and LLM judge parse retry with golden fixtures.
-
-**Runs fully offline.** `backend/tests/conftest.py` replaces the `sentence-transformers` model with deterministic 384-dim L2-normalized fake vectors — no model download required for CI.
-
-### Frontend — 227 Vitest tests
-
-```bash
-cd frontend && npm run test
-```
-
-Covers: run diagnosis heuristics (`runDiagnosis.ts`), run diff (`runDiff.ts`), phase timeline (`runTimeline.ts`), retrieval source formatting (`retrievalSourceFormat.ts`), dashboard analytics format helpers (`dashboardAnalyticsFormat.ts`), runs list query logic (`runsListQuery.ts`), queue browser load (`queueBrowserLoad.ts`), all panel components via RTL (including latency skew warning, high-variance badge, low-sample badge, comparison reliability banner, repeated-sampling note), and all route paths via the router.
-
-### E2E — 14 Playwright tests
+Frontend:
 
 ```bash
 cd frontend
-npx playwright install   # required once; downloads Chromium browser binary
-npx playwright test
+npm run test
 ```
 
-Tests span `e2e/run-detail.spec.ts` (11), `e2e/runs-list.spec.ts` (1), `e2e/queue-browser.spec.ts` (1), and `e2e/dashboard.spec.ts` (1). All use `page.route()` to intercept API calls with deterministic fixtures — **no backend required**.
+E2E:
 
-> **Note:** Browser binaries are not bundled in the repository. Run `npx playwright install` once before the first E2E run on a new machine.
+```bash
+cd frontend
+npx playwright install
+npm run test:e2e
+```
 
----
+## Technical Decisions
 
-## Future Work
+- Use pgvector so trace storage and vector search stay in one relational database.
+- Keep the diagnosis layer deterministic and inspectable rather than adding another opaque model call.
+- Separate heuristic and full evaluator metrics so offline and model-backed runs are not blended into misleading averages.
+- Use Redis/RQ for long-running full-mode jobs so API restarts do not automatically discard queued work.
 
-- **Auth and multi-user** — login, team workspaces, API key management
-- **Hybrid retrieval** — BM25 + vector fusion, reranking layer
-- **Export and reporting** — downloadable run traces, Slack/webhook alerts on failure spikes
-- **Production deploy** — nginx SPA fallback config, managed PostgreSQL, CDN for frontend assets
-- **Richer diff UI** — generated answer text side-by-side, highlighted token-level differences
-- **Full RQ job browser** — bulk queue operations, job-level retry controls
+## Limitations
 
----
+- Local benchmark results are directional and depend on data, config, machine, and sample size.
+- Full evaluation mode requires external provider credentials.
+- The current app is built for evaluation/debugging workflows, not as a public chatbot endpoint.
 
-## Documentation
+## Future Improvements
 
-| Document | Contents |
-|----------|----------|
-| [`docs/architecture.md`](docs/architecture.md) | System layout, data model, API surface, tech stack |
-| [`docs/decisions.md`](docs/decisions.md) | Design rationale and architectural constraints |
-| [`docs/benchmark-results.md`](docs/benchmark-results.md) | Measured benchmark: chunk size × top-k tradeoffs across 48 runs (heuristic-only; all metrics from stored DB traces) |
-| [`docs/deployment.md`](docs/deployment.md) | Vercel + Render deployment runbook |
-
----
+- Authentication and team workspaces.
+- Hybrid retrieval and reranking.
+- Exportable run reports.
+- Managed cloud deployment hardening.
+- Richer run diff views.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See `LICENSE`.
