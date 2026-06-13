@@ -73,9 +73,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "-e",
         "--evaluator",
-        choices=("heuristic", "llm"),
+        choices=("heuristic", "llm", "llm_hybrid"),
         default="heuristic",
-        help="heuristic = inline retrieval+eval; llm = full RAG in-process",
+        help="heuristic = inline; llm / llm_hybrid = full RAG in-process (hybrid may skip LLM judge)",
     )
     p.add_argument("--seed", type=int, default=None, help="Random seed for query shuffle (per dataset)")
     p.add_argument("--experiment-name", default=None)
@@ -90,6 +90,11 @@ def _parse_args() -> argparse.Namespace:
         "--strict",
         action="store_true",
         help="Exit with code 1 if any cell failed",
+    )
+    p.add_argument(
+        "--matched-llm-reduction-workload-id",
+        default=None,
+        help="Tag LLM / llm_hybrid runs for dashboard matched reduction (same id for both arms).",
     )
     return p.parse_args()
 
@@ -109,6 +114,7 @@ async def _async_main(ns: argparse.Namespace) -> int:
             experiment_name=ns.experiment_name,
             config_group_tag=ns.config_group_tag,
             realism_profile=realism,
+            matched_llm_reduction_workload_id=ns.matched_llm_reduction_workload_id,
             commit=True,
         )
     print(

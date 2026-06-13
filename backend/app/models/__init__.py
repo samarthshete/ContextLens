@@ -2,6 +2,7 @@
 
 from app.models.base import Base
 from app.models.chunk import Chunk
+from app.models.diagnosis_timing_session import DiagnosisTimingSession
 from app.models.dataset import Dataset
 from app.models.document import Document
 from app.models.evaluation_result import EvaluationResult
@@ -14,6 +15,7 @@ from app.models.run import Run
 __all__ = [
     "Base",
     "Chunk",
+    "DiagnosisTimingSession",
     "Dataset",
     "Document",
     "EvaluationResult",

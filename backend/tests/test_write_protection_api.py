@@ -41,9 +41,21 @@ async def test_health_includes_write_protection_flag(client, write_key_enabled):
 
 @pytest.mark.asyncio
 async def test_post_forbidden_without_write_key(client, write_key_enabled):
-    r = await client.post("/api/v1/datasets", json={"name": "blocked-dataset"})
+    r = await client.post(
+        "/api/v1/datasets",
+        json={"name": "blocked-dataset"},
+        headers={"X-Request-ID": "write-key-contract"},
+    )
     assert r.status_code == 403
-    assert r.json().get("detail") == "write_key_required"
+    body = r.json()
+    assert body.get("detail") == "write_key_required"
+    assert body["error"] == {
+        "code": "write_key_required",
+        "message": "write_key_required",
+        "retryable": False,
+        "request_id": "write-key-contract",
+    }
+    assert r.headers["X-Request-ID"] == "write-key-contract"
 
 
 @pytest.mark.asyncio

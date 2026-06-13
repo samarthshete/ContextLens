@@ -15,7 +15,9 @@ export function describeApiError(err: unknown): string {
       case 502:
         return 'LLM request failed'
       case 503:
-        return 'LLM not configured'
+        return /api[_ -]?key|openai|claude|anthropic/i.test(err.detail)
+          ? 'LLM not configured'
+          : err.detail || 'Service unavailable.'
       default:
         return err.detail || `Request failed (${err.status}).`
     }

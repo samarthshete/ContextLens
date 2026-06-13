@@ -14,6 +14,7 @@ from app.domain.evaluator_bucket import (
     sql_is_llm_bucket,
 )
 from app.models import Chunk, Dataset, Document, EvaluationResult, GenerationResult, QueryCase, Run
+from app.services.dashboard_evidence import build_diagnosis_timing_evidence, build_llm_reduction_evidence
 from app.services.phase_latency_distribution import get_phase_latency_distribution
 from app.schemas.dashboard_summary import (
     DashboardCostSummary,
@@ -111,6 +112,15 @@ async def get_dashboard_summary(session: AsyncSession, dataset_id: int | None = 
     else:
         benchmark_datasets = int(await session.scalar(select(func.count()).select_from(Dataset)) or 0)
         total_queries = int(await session.scalar(select(func.count()).select_from(QueryCase)) or 0)
+
+    unique_query_cases_with_runs = int(
+        await session.scalar(
+            select(func.count(func.distinct(Run.query_case_id)))
+            .select_from(Run)
+            .where(run_scope)
+        )
+        or 0
+    )
     # Traced = at least one evaluation row (dataset-scoped run slice).
     total_traced_runs = int(
         await session.scalar(
@@ -293,9 +303,13 @@ async def get_dashboard_summary(session: AsyncSession, dataset_id: int | None = 
         )
 
     repeated_sampling_note = (
-        f"{total_runs} runs across {total_queries} unique queries "
-        "(repeated sampling; results are directional, not broad generalization)"
+        f"{total_runs} runs across {unique_query_cases_with_runs} unique query cases in this slice "
+        f"({total_queries} query cases registered); repeated sampling makes run count exceed unique "
+        "queries when cells repeat the same cases."
     )
+
+    diagnosis_timing = await build_diagnosis_timing_evidence(session, dataset_id=dataset_id)
+    llm_reduction = await build_llm_reduction_evidence(session, dataset_id=dataset_id)
 
     return DashboardSummaryResponse(
         total_runs=total_runs,
@@ -307,6 +321,7 @@ async def get_dashboard_summary(session: AsyncSession, dataset_id: int | None = 
             configs_tested=configs_tested,
             documents_processed=documents_processed,
             chunks_indexed=chunks_indexed,
+            unique_query_cases_with_runs=unique_query_cases_with_runs,
         ),
         status_counts=DashboardStatusCounts(
             completed=completed,
@@ -343,4 +358,6 @@ async def get_dashboard_summary(session: AsyncSession, dataset_id: int | None = 
         failure_type_counts=failure_type_counts,
         model_failures=model_failures,
         recent_runs=recent_runs,
+        diagnosis_timing=diagnosis_timing,
+        llm_reduction=llm_reduction,
     )

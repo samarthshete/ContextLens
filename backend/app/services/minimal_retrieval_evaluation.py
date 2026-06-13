@@ -163,3 +163,88 @@ async def compute_minimal_retrieval_evaluation(
         used_llm_judge=False,
         metadata_json=meta,
     )
+
+
+HYBRID_GATE_MAX_CHUNK_SCORE = 0.88
+HYBRID_GATE_MEAN_RELEVANCE = 0.55
+HYBRID_GATE_CONTEXT_COVERAGE = 0.42
+
+
+def hybrid_retrieval_gate_passes(
+    *,
+    max_chunk_score: float,
+    retrieval_relevance: float | None,
+    context_coverage: float | None,
+) -> bool:
+    """When True, hybrid full-RAG may skip the LLM judge (persisted heuristic-style eval instead)."""
+    if retrieval_relevance is None or context_coverage is None:
+        return False
+    return (
+        max_chunk_score >= HYBRID_GATE_MAX_CHUNK_SCORE
+        and retrieval_relevance >= HYBRID_GATE_MEAN_RELEVANCE
+        and context_coverage >= HYBRID_GATE_CONTEXT_COVERAGE
+    )
+
+
+async def compute_hybrid_skipped_evaluation(
+    session: AsyncSession,
+    *,
+    run_id: int,
+    generated_answer: str,
+) -> MinimalRetrievalEvalScores:
+    """Heuristic final scores after generation when the hybrid gate skips the LLM judge.
+
+    **Faithfulness** is lexical recall of generated-answer tokens against retrieved context
+    (not entailment). Documented in evaluation ``metadata_json`` for honest downstream use.
+    """
+    base = await compute_minimal_retrieval_evaluation(session, run_id=run_id)
+    run = await session.get(Run, run_id)
+    if run is None:
+        raise ValueError(f"Run id={run_id} not found")
+    qc = await session.get(QueryCase, run.query_case_id)
+    if qc is None:
+        raise ValueError("Query case missing")
+
+    stmt = (
+        select(RetrievalResult, Chunk.content)
+        .join(Chunk, Chunk.id == RetrievalResult.chunk_id)
+        .where(RetrievalResult.run_id == run_id)
+        .order_by(RetrievalResult.rank)
+    )
+    rows = (await session.execute(stmt)).all()
+    if not rows:
+        return base
+
+    chunk_text = "\n\n".join(content for _, content in rows)
+    gen_tokens = significant_tokens(generated_answer)
+    faithfulness = token_recall(gen_tokens, chunk_text)
+
+    failure_type = classify_heuristic_failure_from_scores(
+        retrieval_miss=False,
+        retrieval_relevance=base.retrieval_relevance,
+        context_coverage=base.context_coverage,
+        completeness=base.completeness,
+    )
+
+    meta = dict(base.metadata_json or {})
+    meta.update(
+        {
+            "evaluator": f"{EVALUATOR_ID}_hybrid_gate_skip",
+            "evaluator_type": "heuristic",
+            "hybrid_judge_skipped": True,
+            "description": (
+                "Hybrid gate skipped LLM judge: scores from retrieval heuristics plus "
+                "lexical faithfulness (generated answer token recall in retrieved context)."
+            ),
+        }
+    )
+
+    return MinimalRetrievalEvalScores(
+        faithfulness=faithfulness,
+        completeness=base.completeness,
+        retrieval_relevance=base.retrieval_relevance,
+        context_coverage=base.context_coverage,
+        failure_type=failure_type,
+        used_llm_judge=False,
+        metadata_json=meta,
+    )

@@ -16,6 +16,7 @@ from sqlalchemy.orm import sessionmaker as sync_sessionmaker
 from app.config import settings
 from app.database import async_session_maker
 from app.models import Document, PipelineConfig, QueryCase, Run
+from app.request_context import reset_request_id, set_request_id
 from app.services.llm_provider_keys import require_llm_api_key_for_full_mode
 from app.services.benchmark_run import (
     execute_retrieval_benchmark_run,
@@ -32,6 +33,7 @@ from app.services.run_lifecycle import (
     STATUS_RETRIEVAL_COMPLETED,
     STATUS_RUNNING,
 )
+from app.services.trace_instrumentation import heuristic_run_instrumentation, merge_run_trace_instrumentation
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,7 @@ async def validate_run_create_prerequisites(
     query_case_id: int,
     pipeline_config_id: int,
     document_id: int | None,
-    eval_mode: Literal["heuristic", "full"],
+    eval_mode: Literal["heuristic", "full", "full_hybrid"],
 ) -> None:
     """Validate FKs and full-mode API key before creating a run row."""
     qc = await session.get(QueryCase, query_case_id)
@@ -73,7 +75,7 @@ async def validate_run_create_prerequisites(
         if doc is None:
             raise DocumentNotFoundError(document_id)
 
-    if eval_mode == "full":
+    if eval_mode in ("full", "full_hybrid"):
         try:
             require_llm_api_key_for_full_mode()
         except ValueError as e:
@@ -149,49 +151,64 @@ async def run_full_benchmark_pipeline(run_id: int, document_id: int | None) -> N
     ``Exception`` types are re-raised for RQ retry.
     ``ValueError`` / ``TypeError`` (precondition / data) mark the run failed and do not retry.
     """
+    request_id: str | None = None
     async with async_session_maker() as session:
         run = await session.get(Run, run_id)
-        if run is None:
-            logger.warning("full run pipeline: run id=%s not found", run_id)
-            return
-        if run.status in (STATUS_COMPLETED, STATUS_FAILED):
-            logger.info(
-                "full run pipeline: run id=%s already terminal (%s), skipping",
-                run_id,
-                run.status,
-            )
-            return
+        if run is not None and run.metadata_json:
+            raw_request_id = run.metadata_json.get("request_id")
+            request_id = str(raw_request_id) if raw_request_id else None
 
+    token = set_request_id(request_id)
     try:
         async with async_session_maker() as session:
             run = await session.get(Run, run_id)
-            if run and run.status == STATUS_RUNNING:
-                await execute_retrieval_for_existing_run(
-                    session,
-                    run_id=run_id,
-                    document_id=document_id,
-                    commit=True,
+            if run is None:
+                logger.warning("full run pipeline: run id=%s not found request_id=%s", run_id, request_id)
+                return
+            if run.status in (STATUS_COMPLETED, STATUS_FAILED):
+                logger.info(
+                    "full run pipeline: run id=%s already terminal (%s), skipping request_id=%s",
+                    run_id,
+                    run.status,
+                    request_id,
                 )
+                return
 
-        async with async_session_maker() as session:
-            run = await session.get(Run, run_id)
-            if run and run.status == STATUS_RETRIEVAL_COMPLETED:
-                await execute_generation_for_run(session, run_id=run_id, commit=True)
+        try:
+            async with async_session_maker() as session:
+                run = await session.get(Run, run_id)
+                if run and run.status == STATUS_RUNNING:
+                    logger.info("full run pipeline: retrieval start run_id=%s request_id=%s", run_id, request_id)
+                    await execute_retrieval_for_existing_run(
+                        session,
+                        run_id=run_id,
+                        document_id=document_id,
+                        commit=True,
+                    )
 
-        async with async_session_maker() as session:
-            run = await session.get(Run, run_id)
-            if run and run.status == STATUS_GENERATION_COMPLETED:
-                await execute_llm_judge_and_complete_run(session, run_id=run_id, commit=True)
+            async with async_session_maker() as session:
+                run = await session.get(Run, run_id)
+                if run and run.status == STATUS_RETRIEVAL_COMPLETED:
+                    logger.info("full run pipeline: generation start run_id=%s request_id=%s", run_id, request_id)
+                    await execute_generation_for_run(session, run_id=run_id, commit=True)
 
-    except (anthropic.APIError, OpenAIAPIError):
-        logger.exception("LLM provider API error (RQ may retry) run_id=%s", run_id)
-        raise
-    except (ValueError, TypeError):
-        logger.exception("Non-retryable error run_id=%s", run_id)
-        await _mark_run_failed_safe(run_id)
-    except Exception:
-        logger.exception("Retryable error run_id=%s", run_id)
-        raise
+            async with async_session_maker() as session:
+                run = await session.get(Run, run_id)
+                if run and run.status == STATUS_GENERATION_COMPLETED:
+                    logger.info("full run pipeline: judge start run_id=%s request_id=%s", run_id, request_id)
+                    await execute_llm_judge_and_complete_run(session, run_id=run_id, commit=True)
+
+        except (anthropic.APIError, OpenAIAPIError):
+            logger.exception("LLM provider API error (RQ may retry) run_id=%s request_id=%s", run_id, request_id)
+            raise
+        except (ValueError, TypeError):
+            logger.exception("Non-retryable error run_id=%s request_id=%s", run_id, request_id)
+            await _mark_run_failed_safe(run_id)
+        except Exception:
+            logger.exception("Retryable error run_id=%s request_id=%s", run_id, request_id)
+            raise
+    finally:
+        reset_request_id(token)
 
 
 async def create_and_execute_run_from_ids(
@@ -240,7 +257,9 @@ async def create_and_execute_run_from_ids(
         used_llm_judge=ev.used_llm_judge,
         cost_usd=None,
         metadata_json=ev.metadata_json,
-        commit=True,
+        commit=False,
     )
+    await merge_run_trace_instrumentation(session, run_id=rid, patch=heuristic_run_instrumentation())
+    await session.commit()
     await session.refresh(run)
     return run

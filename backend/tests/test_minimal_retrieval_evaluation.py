@@ -5,6 +5,7 @@ import pytest
 from app.domain.failure_taxonomy import FailureType
 from app.services.minimal_retrieval_evaluation import (
     classify_heuristic_failure_from_scores,
+    hybrid_retrieval_gate_passes,
     significant_tokens,
     token_recall,
 )
@@ -84,4 +85,27 @@ def test_classify_heuristic_skips_none_scores():
             completeness=None,
         )
         == FailureType.NO_FAILURE.value
+    )
+
+
+def test_hybrid_gate_requires_scores_and_thresholds():
+    assert not hybrid_retrieval_gate_passes(
+        max_chunk_score=0.9,
+        retrieval_relevance=None,
+        context_coverage=0.5,
+    )
+    assert not hybrid_retrieval_gate_passes(
+        max_chunk_score=0.9,
+        retrieval_relevance=0.6,
+        context_coverage=None,
+    )
+    assert hybrid_retrieval_gate_passes(
+        max_chunk_score=0.88,
+        retrieval_relevance=0.55,
+        context_coverage=0.42,
+    )
+    assert not hybrid_retrieval_gate_passes(
+        max_chunk_score=0.87,
+        retrieval_relevance=0.55,
+        context_coverage=0.42,
     )

@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 class RunCreateRequest(BaseModel):
     query_case_id: int = Field(..., ge=1, description="``query_cases.id``")
     pipeline_config_id: int = Field(..., ge=1, description="``pipeline_configs.id``")
-    eval_mode: Literal["heuristic", "full"] = "heuristic"
+    eval_mode: Literal["heuristic", "full", "full_hybrid"] = "heuristic"
     document_id: int | None = Field(
         None,
         ge=1,

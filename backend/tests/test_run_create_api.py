@@ -3,10 +3,12 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 from redis.exceptions import ConnectionError as RedisConnectionError
+from sqlalchemy import select
 
 from app.database import async_session_maker
 from app.main import app
-from app.models import Dataset, PipelineConfig, QueryCase
+from app.models import Dataset, PipelineConfig, QueryCase, Run
+from app.services.run_lifecycle import STATUS_FAILED
 from tests.conftest import make_upload
 
 BASE = "/api/v1"
@@ -342,6 +344,25 @@ async def test_create_run_full_redis_unavailable_returns_503(
     resp = await run_create_client.post(
         f"{BASE}/runs",
         json={"query_case_id": qc_id, "pipeline_config_id": pc_id, "eval_mode": "full"},
+        headers={"X-Request-ID": "test-redis-503"},
     )
     assert resp.status_code == 503
-    assert "queue" in resp.json()["detail"].lower() or "redis" in resp.json()["detail"].lower()
+    body = resp.json()
+    assert "queue" in body["detail"].lower() or "redis" in body["detail"].lower()
+    assert body["error"]["code"] == "service_unavailable"
+    assert body["error"]["retryable"] is True
+    assert body["error"]["request_id"] == "test-redis-503"
+
+    async with async_session_maker() as session:
+        run = (
+            await session.execute(
+                select(Run)
+                .where(Run.query_case_id == qc_id)
+                .where(Run.pipeline_config_id == pc_id)
+                .order_by(Run.id.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+        assert run.status == STATUS_FAILED
+        assert run.metadata_json["queue_enqueue_failed"] is True
+        assert run.metadata_json["request_id"] == "test-redis-503"

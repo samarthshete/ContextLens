@@ -5,7 +5,7 @@ Intended for scripts and internal tooling (not a public HTTP contract). Each run
 and indices for traceability.
 
 **Heuristic** mode runs the inline retrieval + minimal-eval pipeline.
-**LLM** mode runs the full RAG pipeline in-process (same code path as the RQ worker).
+**LLM** / **llm_hybrid** modes run the full RAG pipeline in-process (same code path as the RQ worker; hybrid sets `evaluator_execution_mode=hybrid` on the run row).
 
 Optional :class:`BenchmarkRealismProfile` applies **only** to heuristic batch cells (retrieval
 perturbation + score noise + low-score failure classification). Full LLM runs use provider
@@ -33,6 +33,7 @@ from app.services.benchmark_realism import (
     perturb_search_chunk_hits,
 )
 from app.services.evaluation_persistence import persist_evaluation_and_complete_run
+from app.services.trace_instrumentation import heuristic_run_instrumentation, merge_run_trace_instrumentation
 from app.services.minimal_retrieval_evaluation import compute_minimal_retrieval_evaluation
 from app.services.retrieval import search_chunks
 from app.services.run_create import (
@@ -191,8 +192,11 @@ async def _execute_heuristic_cell(
         used_llm_judge=ev.used_llm_judge,
         cost_usd=None,
         metadata_json=meta,
-        commit=commit,
+        commit=False,
     )
+    await merge_run_trace_instrumentation(session, run_id=run_id, patch=heuristic_run_instrumentation())
+    if commit:
+        await session.commit()
 
 
 async def _execute_llm_cell(
@@ -201,8 +205,15 @@ async def _execute_llm_cell(
     pipeline_config_id: int,
     document_id: int | None,
     run_metadata: dict,
+    hybrid: bool = False,
 ) -> bool:
     """Returns True if terminal status is ``completed``."""
+    meta = dict(run_metadata)
+    if hybrid:
+        meta["evaluator_execution_mode"] = "hybrid"
+    else:
+        meta.setdefault("evaluator_execution_mode", "llm_only")
+
     async with async_session_maker() as session:
         await validate_run_create_prerequisites(
             session,
@@ -216,7 +227,7 @@ async def _execute_llm_cell(
             query_case_id=query_case_id,
             pipeline_config_id=pipeline_config_id,
             status=STATUS_RUNNING,
-            metadata_json=run_metadata,
+            metadata_json=meta,
         )
         await session.commit()
         rid = run.id
@@ -240,6 +251,7 @@ async def run_batch_benchmark(
     document_id: int | None = None,
     experiment_name: str | None = None,
     config_group_tag: str | None = None,
+    matched_llm_reduction_workload_id: str | None = None,
     realism_profile: BenchmarkRealismProfile | None = None,
     commit: bool = True,
 ) -> BatchBenchmarkResult:
@@ -250,13 +262,14 @@ async def run_batch_benchmark(
 
     ``evaluator_type``:
     - ``"heuristic"`` — synchronous retrieval + minimal evaluation (uses *session*).
-    - ``"llm"`` — full RAG in-process via ``run_full_benchmark_pipeline`` (requires provider keys).
+    - ``"llm"`` — full RAG in-process (LLM judge unless gate fails on hybrid).
+    - ``"llm_hybrid"`` — full RAG with hybrid judge gate (``evaluator_execution_mode=hybrid`` on the run).
 
     Raises ``FullModeNotConfiguredError`` on the first LLM cell if keys are missing.
     """
     et = evaluator_type.strip().lower()
-    if et not in ("heuristic", "llm"):
-        raise ValueError("evaluator_type must be 'heuristic' or 'llm'")
+    if et not in ("heuristic", "llm", "llm_hybrid"):
+        raise ValueError("evaluator_type must be 'heuristic', 'llm', or 'llm_hybrid'")
 
     if queries_per_dataset < 1 or runs_per_query < 1:
         raise ValueError("queries_per_dataset and runs_per_query must be >= 1")
@@ -301,6 +314,9 @@ async def run_batch_benchmark(
                         meta["experiment_name"] = experiment_name
                     if config_group_tag:
                         meta["config_group_tag"] = config_group_tag
+                    if matched_llm_reduction_workload_id and et in ("llm", "llm_hybrid"):
+                        meta["matched_llm_reduction_workload_id"] = matched_llm_reduction_workload_id.strip()
+                        meta["matched_llm_reduction_arm"] = "hybrid" if et == "llm_hybrid" else "llm_only"
 
                     try:
                         if et == "heuristic":
@@ -321,6 +337,7 @@ async def run_batch_benchmark(
                                 pipeline_config_id=cfg_id,
                                 document_id=document_id,
                                 run_metadata=meta,
+                                hybrid=(et == "llm_hybrid"),
                             )
                             if ok:
                                 successes += 1

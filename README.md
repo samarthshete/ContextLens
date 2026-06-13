@@ -63,23 +63,22 @@ ContextLens captures a **complete, structured trace** for every benchmark run an
 - **Failure breakdown** — evaluation `failure_type` histograms (excluding `NO_FAILURE`); **recent system-failed runs** = `status` failed only
 - **Config insights** — per-pipeline scores, cost, and top evaluation failure label; **heuristic** vs **LLM** tables stay separate. **LLM gating:** `llm_runs` **&lt; 3** → sparse warning only (hides LLM cost block, LLM compare bucket, LLM config-insights table); **3–9** → illustrative “limited evidence” copy where applicable. Tradeoff note: lower `top_k` tends to improve retrieval precision; higher `top_k` improves context coverage but adds noise.
 - **Config comparison reliability** — `comparison_confidence` (LOW / MEDIUM / HIGH) based on `effective_sample_size = min(unique queries across compared configs)`; thresholds <8 → LOW, <15 → MEDIUM, ≥15 → HIGH. A `repeated_sampling_note` is surfaced when the same queries were run multiple times. `comparison_statistically_reliable: false` unless ≥10 unique queries per config. These gates appear as banners in the comparison panel — not buried in JSON.
+- **Scale + evidence (persisted only)** — Summary includes **`unique_query_cases_with_runs`** (distinct `query_case_id` in the slice), **diagnosis timing** aggregates from `diagnosis_timing_sessions` (non-synthetic rows; tiered n&lt;5 / n&lt;10 gates), and **matched LLM-judge reduction** from `runs.trace_instrumentation_json` when batch runs share `matched_llm_reduction_workload_id` + `matched_llm_reduction_arm` (`llm_only` vs `hybrid`). No fabricated improvement numbers: empty tiers mean “evidence pending.”
 
 ## Benchmark Reality and Limitations
 
-- Current benchmark: **49 runs across 6 unique queries (repeated sampling)**
-- Effective sample size: **6 queries**
-- Config comparison confidence: **LOW (directional only)**
-- Dominant failure mode: **retrieval-related (e.g. RETRIEVAL_PARTIAL)**
+- **Reported scale and outcomes always come from your database** — open the Dashboard after seeding/running benchmarks; do not treat README as a scoreboard.
+- **52-query scale pack** — `python scripts/seed_scale_benchmark.py` registers **`scale_rag_engineering_v1`**, **52** query cases, two pipeline configs, and one ingested corpus. Example: **208** traced heuristic runs = `52 × 2 configs × 2 reps` via `scripts/run_batch_benchmark.py` (see `scripts/run_scale_traced_batch.py` for copy-paste commands).
+- **Hybrid full-RAG** — `POST /api/v1/runs` with **`eval_mode: full_hybrid`** (or batch `-e llm_hybrid`) may **skip the LLM judge** when retrieval heuristics pass a documented gate; counters are stored on **`runs.trace_instrumentation_json`**.
+- **Diagnosis timing experiments** — `GET/POST/PATCH …/runs/{id}/diagnosis-timing-sessions` plus run-detail UI: **manual** mode hides assisted diagnosis widgets while you record timestamps.
+
 ### LLM Evaluation Insight
 
-LLM-based evaluation demonstrates both:
-- **Correct grounded responses** when relevant context is retrieved
-- **Retrieval-miss failures**, where the model correctly abstains when context is insufficient
+LLM-based evaluation demonstrates both grounded responses and retrieval-miss behavior when context is insufficient. Sample-size gates (dashboard + comparison) apply — use persisted counts, not narrative claims.
 
-Due to limited sample size, these results are used for qualitative validation rather than statistical conclusions.
 - Latency: **highly skewed due to local execution and cold-start effects; median more reliable than average**
 
-This system is designed to surface failure patterns and tradeoffs, not to claim production-grade performance metrics.
+This system is designed to surface failure patterns and tradeoffs, not to claim production-grade performance metrics without stored evidence.
 
 ### Infrastructure
 - **Durable full-mode pipeline** — full RAG runs (generation + LLM judge) enqueued via Redis + RQ; survive API restarts; stale-lock reconciliation; one-click requeue
@@ -101,6 +100,7 @@ This system is designed to surface failure patterns and tradeoffs, not to claim 
 │                 FastAPI  (async, Python)                     │
 │  POST /runs        GET /runs         GET /runs/:id           │
 │  GET /runs/dashboard-summary?dataset_id=   GET /runs/dashboard-analytics?dataset_id= │
+│  GET/POST/PATCH …/runs/:id/diagnosis-timing-sessions        │
 │  GET /queue-status   POST /requeue   GET /config-comparison  │
 │  Registry CRUD — datasets, query cases, pipeline configs       │
 └──────┬──────────────────┬───────────────────────┬───────────┘
@@ -127,6 +127,8 @@ Query × Config → Retrieve top-k → Heuristic eval → Trace stored → compl
 Query × Config → Retrieve → LLM Generate → LLM Judge → Trace stored → completed
                               (enqueued via RQ; durable across API restarts)
 ```
+
+**Benchmark path — full RAG (hybrid judge gate):** same as full RAG, but when `evaluator_execution_mode=hybrid` and retrieval scores pass thresholds, the **LLM judge call is skipped** and heuristic-style scores are persisted; **`runs.trace_instrumentation_json`** records judge calls attempted/used/skipped.
 
 **Client-side diagnosis layer** is an intentional architectural decision: the diagnosis, diff, timeline, and source-label features are deterministic TypeScript logic over the existing `GET /runs/{id}` payload. No new backend contracts were needed — the trace is already complete.
 
@@ -157,7 +159,7 @@ Query × Config → Retrieve → LLM Generate → LLM Judge → Trace stored →
 - **Anthropic** (optional) — set `LLM_PROVIDER=anthropic` and `CLAUDE_API_KEY`
 
 ### Testing
-- **pytest** — 215 backend tests; deterministic fake embeddings in `conftest.py` for fully offline CI
+- **pytest** — 290 backend tests; deterministic fake embeddings in `conftest.py` for fully offline CI
 - **Vitest + React Testing Library** — 227 frontend unit/integration tests
 - **Playwright** — 14 E2E tests using `page.route()` API mocking; no backend required to run
 
@@ -206,11 +208,53 @@ docker compose exec backend python scripts/seed_benchmark.py
 docker compose exec backend python scripts/run_benchmark.py --eval-mode heuristic
 ```
 
+**52-query scale benchmark** — one command seeds + executes + verifies 208 traced runs:
+
+```bash
+docker compose exec backend python scripts/run_scale_evidence_pipeline.py          # 208 runs (52×2×2)
+docker compose exec backend python scripts/run_scale_evidence_pipeline.py --reps 3  # 312 runs (52×2×3)
+```
+
+Or step-by-step (seed, then print batch commands, then run manually):
+
+```bash
+docker compose exec backend python scripts/seed_scale_benchmark.py
+docker compose exec backend python scripts/run_scale_traced_batch.py   # prints example batch commands
+```
+
 For full RAG runs (LLM generation + judge):
 
 ```bash
 docker compose exec backend python scripts/run_benchmark.py --eval-mode full
 ```
+
+For **full RAG with hybrid judge gate** (enqueue like full; may skip LLM judge when the gate passes):
+
+```bash
+# HTTP: eval_mode full_hybrid — or batch:
+docker compose exec backend python scripts/run_batch_benchmark.py -d <dataset_id> -c <config_id> \
+  -q 10 -r 1 -e llm_hybrid --document-id <doc_id>
+```
+
+Matched **llm_only vs hybrid** comparison — automated orchestration (requires API keys):
+
+```bash
+docker compose exec backend python scripts/run_llm_reduction_evidence.py               # 3 workloads
+docker compose exec backend python scripts/run_llm_reduction_evidence.py --workloads 5  # 5 workloads
+docker compose exec backend python scripts/run_llm_reduction_evidence.py --dry-run      # preview only
+```
+
+**Diagnosis timing experiments** — pure-Python experiment design in `app/services/diagnosis_experiment_design.py` (buckets, scoring, balanced 10 manual + 10 assisted plan). CLI:
+
+```bash
+docker compose exec backend python scripts/list_diagnosis_candidates.py                    # ranked candidates
+docker compose exec backend python scripts/list_diagnosis_candidates.py --view buckets     # per-bucket pool vs targets
+docker compose exec backend python scripts/list_diagnosis_candidates.py --view plan        # balanced 20-slot plan + warnings
+docker compose exec backend python scripts/list_diagnosis_candidates.py --view plan --export-plan /tmp/plan.csv
+docker compose exec backend python scripts/list_diagnosis_candidates.py --export-sessions  # completed sessions CSV
+```
+
+Buckets: **retrieval_related** (miss/partial/chunk), **generation_incomplete** (unsupported/incomplete/truncation), **mixed_ambiguous** (mixed/unknown/context insufficient), **easy_control** (NO_FAILURE). Targets per mode: 4/3/2/1. Warnings when any bucket has fewer than `2 × target` candidates or total slots &lt; 20. Export rows use stable keys (`EXPORT_PLAN_ROW_KEYS`).
 
 ### 5. Frontend
 
@@ -351,7 +395,7 @@ Effective sample size: 6 unique queries → `comparison_confidence: LOW`. Reliab
 | One config tested | Benchmark across configs; aggregate comparison with per-evaluator bucketing |
 | No operational visibility | Dashboard: 90-day trends, p95 latencies, per-config failure rates |
 | Evaluation = "looks right" | Dual-mode scoring with N/A vs zero semantics; no blended averages across evaluator types |
-| No test infrastructure | 456 automated tests across three layers (215 backend + 227 frontend + 14 E2E) with offline-capable fixtures |
+| No test infrastructure | 531 automated tests across three layers (290 backend + 227 frontend + 14 E2E) with offline-capable fixtures |
 
 The diagnosis layer is intentionally client-side: deterministic TypeScript logic over the existing run trace. No additional LLM calls, no new API contracts, fully testable in isolation.
 
@@ -359,7 +403,7 @@ The diagnosis layer is intentionally client-side: deterministic TypeScript logic
 
 ## Testing and Quality
 
-### Backend — 215 pytest tests
+### Backend — 290 pytest tests
 
 ```bash
 cd backend && pytest

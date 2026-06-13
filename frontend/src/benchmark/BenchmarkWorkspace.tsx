@@ -25,6 +25,7 @@ import { RetrievalHitsSection } from './RetrievalHitsSection'
 import { RetrievalDiagnosisPanel } from './RetrievalDiagnosisPanel'
 import { RunDiagnosisSummary } from './RunDiagnosisSummary'
 import { DocumentDetailPanel } from './DocumentDetailPanel'
+import { DiagnosisTimingExperimentPanel } from './DiagnosisTimingExperimentPanel'
 import { PhaseTimeline } from './PhaseTimeline'
 import { QueueBrowserPanel } from './QueueBrowserPanel'
 import { RunsFilterBar } from './RunsFilterBar'
@@ -275,10 +276,12 @@ export function BenchmarkWorkspace({ routeView }: { routeView: View }) {
   )
   const [runDetail, setRunDetail] = useState<RunDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [diagnosisExperimentMode, setDiagnosisExperimentMode] = useState<'off' | 'manual' | 'assisted'>(
+    'off',
+  )
 
   const [compareSelected, setCompareSelected] = useState<Set<number>>(new Set())
   const [compareEvaluator, setCompareEvaluator] = useState<'heuristic' | 'llm' | 'both'>('both')
-  const [compareCombine, setCompareCombine] = useState(false)
   const [compareLoading, setCompareLoading] = useState(false)
   const [compareResult, setCompareResult] = useState<Awaited<
     ReturnType<typeof api.configComparison>
@@ -307,6 +310,10 @@ export function BenchmarkWorkspace({ routeView }: { routeView: View }) {
       setDetailRunId(paramRunId)
     }
   }, [view, paramRunId])
+
+  useEffect(() => {
+    setDiagnosisExperimentMode('off')
+  }, [detailRunId])
 
   const canSubmit = isBenchmarkFormReady(datasetId, queryCaseId, pipelineConfigId)
 
@@ -625,7 +632,6 @@ export function BenchmarkWorkspace({ routeView }: { routeView: View }) {
     try {
       const r = await api.configComparison(ids, {
         evaluatorType: compareEvaluator,
-        combineEvaluators: compareCombine,
       })
       setCompareResult(r)
     } catch (err) {
@@ -1057,7 +1063,19 @@ export function BenchmarkWorkspace({ routeView }: { routeView: View }) {
 
               <PhaseTimeline runDetail={runDetail} />
 
-              <RunDiagnosisSummary runDetail={runDetail} />
+              <DiagnosisTimingExperimentPanel
+                runId={runDetail.run_id}
+                onModeChange={setDiagnosisExperimentMode}
+              />
+
+              {diagnosisExperimentMode === 'manual' ? (
+                <p className="cl-msg cl-msg-warn" role="note">
+                  Manual baseline mode: assisted diagnosis summaries and panels are hidden while you time
+                  unaided triage.
+                </p>
+              ) : (
+                <RunDiagnosisSummary runDetail={runDetail} />
+              )}
 
               {runDetail.run_id === detailRunId ? (
                 <RunQueuePanel
@@ -1086,17 +1104,21 @@ export function BenchmarkWorkspace({ routeView }: { routeView: View }) {
                 </p>
               </section>
 
-              <div className="cl-diagnosis-stack">
-                <RetrievalDiagnosisPanel runDetail={runDetail} />
-                <ContextQualityPanel runDetail={runDetail} />
-              </div>
+              {diagnosisExperimentMode !== 'manual' ? (
+                <div className="cl-diagnosis-stack">
+                  <RetrievalDiagnosisPanel runDetail={runDetail} />
+                  <ContextQualityPanel runDetail={runDetail} />
+                </div>
+              ) : null}
 
               <RetrievalHitsSection
                 hits={runDetail.retrieval_hits}
                 documentTitleById={documentTitleById}
               />
 
-              <GenerationJudgeInsightsPanel runDetail={runDetail} />
+              {diagnosisExperimentMode !== 'manual' ? (
+                <GenerationJudgeInsightsPanel runDetail={runDetail} />
+              ) : null}
 
               <RunDiffPanel baseRun={runDetail} />
 
@@ -1134,8 +1156,8 @@ export function BenchmarkWorkspace({ routeView }: { routeView: View }) {
           <div className="cl-card">
             <h2>Config comparison</h2>
             <p className="cl-muted">
-              Uses <code>GET /runs/config-comparison</code>. Heuristic vs LLM buckets stay separate unless you
-              enable “Combine evaluators”.
+              Uses <code>GET /runs/config-comparison</code>. Heuristic and LLM buckets stay separate when you
+              choose “Both”.
             </p>
 
             {registryLoading ? (
@@ -1159,19 +1181,6 @@ export function BenchmarkWorkspace({ routeView }: { routeView: View }) {
                 <option value="heuristic">Heuristic only</option>
                 <option value="llm">LLM only</option>
               </select>
-            </div>
-
-            <div className="cl-check">
-              <input
-                type="checkbox"
-                id="ccomb"
-                checked={compareCombine}
-                onChange={(ev) => setCompareCombine(ev.target.checked)}
-              />
-              <label htmlFor="ccomb">
-                Combine evaluators (single merged row per config —{' '}
-                <code>combine_evaluators=true</code>)
-              </label>
             </div>
 
             <h3 className="cl-h3-muted">Pipeline configs</h3>

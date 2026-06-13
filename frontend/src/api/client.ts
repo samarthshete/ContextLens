@@ -16,6 +16,7 @@ import type {
   QueryCaseCreateBody,
   QueryCaseUpdateBody,
   RunCreateBody,
+  DiagnosisTimingSession,
   DashboardSummaryResponse,
   RunCreateOutcome,
   RunCreateResponse,
@@ -35,12 +36,22 @@ export type DocumentUploadOptions = {
 export class ApiError extends Error {
   status: number
   detail: string
+  code: string | null
+  retryable: boolean | null
+  requestId: string | null
 
-  constructor(status: number, detail: string) {
+  constructor(
+    status: number,
+    detail: string,
+    options?: { code?: string | null; retryable?: boolean | null; requestId?: string | null },
+  ) {
     super(detail)
     this.name = 'ApiError'
     this.status = status
     this.detail = detail
+    this.code = options?.code ?? null
+    this.retryable = options?.retryable ?? null
+    this.requestId = options?.requestId ?? null
   }
 }
 
@@ -59,15 +70,37 @@ export type ApiMetaResponse = {
   app_env: string
 }
 
-async function parseError(res: Response): Promise<string> {
-  try {
-    const j = (await res.json()) as { detail?: unknown }
-    if (typeof j.detail === 'string') return j.detail
-    if (Array.isArray(j.detail)) return JSON.stringify(j.detail)
-    return res.statusText || `HTTP ${res.status}`
-  } catch {
-    return res.statusText || `HTTP ${res.status}`
+type ApiErrorBody = {
+  detail?: unknown
+  error?: {
+    code?: unknown
+    message?: unknown
+    retryable?: unknown
+    request_id?: unknown
   }
+}
+
+async function parseError(res: Response): Promise<ApiError> {
+  let body: ApiErrorBody | null = null
+  try {
+    body = (await res.json()) as ApiErrorBody
+  } catch {
+    body = null
+  }
+  const envelope = body?.error
+  const message =
+    typeof envelope?.message === 'string'
+      ? envelope.message
+      : typeof body?.detail === 'string'
+        ? body.detail
+        : Array.isArray(body?.detail)
+          ? JSON.stringify(body.detail)
+          : res.statusText || `HTTP ${res.status}`
+  return new ApiError(res.status, message, {
+    code: typeof envelope?.code === 'string' ? envelope.code : null,
+    retryable: typeof envelope?.retryable === 'boolean' ? envelope.retryable : null,
+    requestId: typeof envelope?.request_id === 'string' ? envelope.request_id : null,
+  })
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -81,7 +114,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     headers: writeKeyHeaders(baseHeaders),
   })
   if (!res.ok) {
-    throw new ApiError(res.status, await parseError(res))
+    throw await parseError(res)
   }
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
@@ -170,7 +203,7 @@ export const api = {
       body,
     })
     if (!res.ok) {
-      throw new ApiError(res.status, await parseError(res))
+      throw await parseError(res)
     }
     return res.json() as Promise<DocumentResponse>
   },
@@ -188,10 +221,10 @@ export const api = {
         document_id: body.document_id ?? undefined,
       }),
     })
-    const data = (await res.json()) as RunCreateResponse
     if (!res.ok) {
-      throw new ApiError(res.status, await parseError(res))
+      throw await parseError(res)
     }
+    const data = (await res.json()) as RunCreateResponse
     return { ...data, httpStatus: res.status }
   },
 
@@ -227,6 +260,35 @@ export const api = {
 
   getRun: (runId: number) => apiFetch<RunDetail>(`/runs/${runId}`),
 
+  listDiagnosisTimingSessions: (runId: number) =>
+    apiFetch<DiagnosisTimingSession[]>(`/runs/${runId}/diagnosis-timing-sessions`),
+
+  createDiagnosisTimingSession: (
+    runId: number,
+    body: {
+      mode: 'manual' | 'assisted'
+      started_at?: string | null
+      session_key?: string | null
+      synthetic?: boolean
+    },
+  ) => apiJson<DiagnosisTimingSession>(`/runs/${runId}/diagnosis-timing-sessions`, 'POST', body),
+
+  patchDiagnosisTimingSession: (
+    runId: number,
+    sessionId: number,
+    body: {
+      first_meaningful_insight_at?: string | null
+      completed_at?: string | null
+      resolution_label?: string | null
+      notes?: string | null
+    },
+  ) =>
+    apiJson<DiagnosisTimingSession>(
+      `/runs/${runId}/diagnosis-timing-sessions/${sessionId}`,
+      'PATCH',
+      body,
+    ),
+
   getRunQueueStatus: (runId: number) =>
     apiFetch<RunQueueStatusResponse>(`/runs/${runId}/queue-status`),
 
@@ -237,7 +299,6 @@ export const api = {
     pipelineConfigIds: number[],
     options?: {
       evaluatorType?: 'heuristic' | 'llm' | 'both'
-      combineEvaluators?: boolean
       /** When set, matches dashboard ``dataset_id`` scope (includes benchmark_realism runs for that dataset). */
       datasetId?: number | null
     },
@@ -247,9 +308,6 @@ export const api = {
       sp.append('pipeline_config_ids', String(id))
     }
     sp.set('evaluator_type', options?.evaluatorType ?? 'both')
-    if (options?.combineEvaluators) {
-      sp.set('combine_evaluators', 'true')
-    }
     if (options?.datasetId != null) {
       sp.set('dataset_id', String(options.datasetId))
     }

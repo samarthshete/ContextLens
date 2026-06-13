@@ -16,12 +16,14 @@ COPY app ./app
 COPY alembic.ini .
 COPY alembic ./alembic
 COPY scripts ./scripts
+COPY tests ./tests
 
 RUN chmod +x scripts/rq_worker.sh
 
 # Install package + all [project] dependencies from pyproject.toml (includes ``openai``).
-RUN pip install --no-cache-dir . \
-    && python -c "import openai; import anthropic; print('deps ok: openai + anthropic')"
+# Also install [dev] extras so ``pytest`` can run inside the container.
+RUN pip install --no-cache-dir ".[dev]" \
+    && python -c "import openai; import anthropic; import pytest; print('deps ok: openai + anthropic + pytest')"
 
 EXPOSE 8000
 

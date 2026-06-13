@@ -29,13 +29,15 @@ class DashboardScaleMetrics(BaseModel):
     total_queries: int = 0
     """Rows in ``query_cases``."""
     total_traced_runs: int = 0
-    """Runs with ≥1 ``retrieval_results`` row and ≥1 ``evaluation_results`` row (same as metrics aggregate)."""
+    """Runs with ≥1 ``evaluation_results`` row (dashboard slice; ``aggregate.py`` may use stricter retrieval+eval)."""
     configs_tested: int = 0
     """``COUNT(DISTINCT runs.pipeline_config_id)`` over all run rows (same as metrics aggregate)."""
     documents_processed: int = 0
     """Documents with ``status == 'processed'`` (successful ingest per upload pipeline)."""
     chunks_indexed: int = 0
     """Rows in ``chunks`` (stored chunk records; cascade with documents)."""
+    unique_query_cases_with_runs: int = 0
+    """``COUNT(DISTINCT query_case_id)`` over runs in the active dashboard scope."""
 
 
 class DashboardEvaluatorCounts(BaseModel):
@@ -99,6 +101,40 @@ class DashboardCostSummary(BaseModel):
     """Distinct ``run_id`` count for ``avg_cost_usd_per_full_rag_run``."""
 
 
+class DashboardLlmReductionWorkloadRow(BaseModel):
+    matched_workload_id: str
+    dataset_id: int | None = None
+    llm_only_runs: int
+    hybrid_runs: int
+    avg_llm_judge_calls_llm_only: float
+    avg_llm_judge_calls_hybrid: float
+    llm_judge_reduction_pct: float
+
+
+class DashboardLlmReductionEvidence(BaseModel):
+    matched_workloads: list[DashboardLlmReductionWorkloadRow] = Field(default_factory=list)
+    workload_count: int = 0
+    median_llm_judge_reduction_pct_across_workloads: float | None = None
+    evidence_tier: Literal["sparse", "directional", "normal"] = "sparse"
+    evidence_tier_note: str = ""
+    validity_note: str = ""
+
+
+class DashboardDiagnosisTimingEvidence(BaseModel):
+    sessions_count: int = 0
+    manual_completed_sessions: int = 0
+    assisted_completed_sessions: int = 0
+    median_diagnosis_duration_sec_manual: float | None = None
+    median_diagnosis_duration_sec_assisted: float | None = None
+    median_time_to_first_insight_sec_manual: float | None = None
+    median_time_to_first_insight_sec_assisted: float | None = None
+    median_delta_sec_assisted_vs_manual: float | None = None
+    percent_reduction_vs_manual: float | None = None
+    evidence_tier: Literal["insufficient", "limited", "normal"] = "insufficient"
+    evidence_tier_note: str | None = None
+    framework_note: str = ""
+
+
 class DashboardRecentRun(BaseModel):
     run_id: int
     status: str
@@ -126,3 +162,7 @@ class DashboardSummaryResponse(BaseModel):
     """Evaluation rows on **organic** runs where ``failure_type`` is set and not ``NO_FAILURE`` (quality / retrieval labels)."""
 
     recent_runs: list[DashboardRecentRun]
+    diagnosis_timing: DashboardDiagnosisTimingEvidence = Field(
+        default_factory=DashboardDiagnosisTimingEvidence
+    )
+    llm_reduction: DashboardLlmReductionEvidence = Field(default_factory=DashboardLlmReductionEvidence)

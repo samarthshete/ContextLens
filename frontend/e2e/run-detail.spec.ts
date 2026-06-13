@@ -40,6 +40,54 @@ async function mockApi(page: Page) {
     route.fulfill({ status: 404, json: { detail: 'Run not found' }, contentType: 'application/json' }),
   )
 
+  await page.route('**/api/v1/runs/*/diagnosis-timing-sessions', (route) => {
+    const m = route.request().method()
+    if (m === 'GET') {
+      return route.fulfill({ json: [], contentType: 'application/json' })
+    }
+    if (m === 'POST') {
+      return route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        json: {
+          id: 10,
+          run_id: 1,
+          mode: 'manual',
+          started_at: '2026-01-01T00:00:00Z',
+          first_meaningful_insight_at: null,
+          completed_at: null,
+          resolution_label: null,
+          notes: null,
+          session_key: null,
+          synthetic: false,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      })
+    }
+    return route.continue()
+  })
+  await page.route('**/api/v1/runs/*/diagnosis-timing-sessions/*', (route) => {
+    if (route.request().method() === 'PATCH') {
+      return route.fulfill({
+        contentType: 'application/json',
+        json: {
+          id: 10,
+          run_id: 1,
+          mode: 'manual',
+          started_at: '2026-01-01T00:00:00Z',
+          first_meaningful_insight_at: '2026-01-01T00:01:00Z',
+          completed_at: '2026-01-01T00:02:00Z',
+          resolution_label: null,
+          notes: null,
+          session_key: null,
+          synthetic: false,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      })
+    }
+    return route.continue()
+  })
+
   // Queue status — heuristic runs don't need Redis
   await page.route('**/api/v1/runs/*/queue-status', (route) =>
     route.fulfill({

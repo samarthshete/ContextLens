@@ -304,6 +304,7 @@ async def test_dashboard_summary_response_shape(dash_client: AsyncClient):
         "configs_tested",
         "documents_processed",
         "chunks_indexed",
+        "unique_query_cases_with_runs",
     ):
         assert k in sc
         assert isinstance(sc[k], int)
@@ -331,6 +332,12 @@ async def test_dashboard_summary_response_shape(dash_client: AsyncClient):
     assert "model_failures" in body
     assert isinstance(body["model_failures"], int)
     assert isinstance(body["recent_runs"], list)
+    assert "diagnosis_timing" in body
+    assert isinstance(body["diagnosis_timing"], dict)
+    assert "evidence_tier" in body["diagnosis_timing"]
+    assert "llm_reduction" in body
+    assert isinstance(body["llm_reduction"], dict)
+    assert "matched_workloads" in body["llm_reduction"]
 
 
 @pytest.mark.asyncio
@@ -411,6 +418,9 @@ async def test_dashboard_summary_scale_increments_with_traced_run_and_corpus(das
     assert b1["scale"]["configs_tested"] == b0["scale"]["configs_tested"] + 1
     assert b1["scale"]["documents_processed"] == b0["scale"]["documents_processed"] + 1
     assert b1["scale"]["chunks_indexed"] == b0["scale"]["chunks_indexed"] + 1
+    assert b1["scale"]["unique_query_cases_with_runs"] == b0["scale"]["unique_query_cases_with_runs"] + 1
+    assert "diagnosis_timing" in b1
+    assert "llm_reduction" in b1
 
 
 @pytest.mark.asyncio

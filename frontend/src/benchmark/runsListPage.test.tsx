@@ -52,7 +52,7 @@ vi.mock('../api/client', async (importOriginal) => {
       dashboardSummary: vi.fn().mockResolvedValue({
         total_runs: 0,
         repeated_sampling_note:
-          '0 runs across 0 unique queries (repeated sampling; results are directional, not broad generalization)',
+          '0 runs across 0 unique query cases in this slice (0 query cases registered); repeated sampling makes run count exceed unique queries when cells repeat the same cases.',
         scale: {
           benchmark_datasets: 0,
           total_queries: 0,
@@ -60,6 +60,7 @@ vi.mock('../api/client', async (importOriginal) => {
           configs_tested: 0,
           documents_processed: 0,
           chunks_indexed: 0,
+          unique_query_cases_with_runs: 0,
         },
         status_counts: { completed: 0, failed: 0, in_progress: 0 },
         evaluator_counts: { heuristic_runs: 0, llm_runs: 0, runs_without_evaluation: 0 },
@@ -88,6 +89,28 @@ vi.mock('../api/client', async (importOriginal) => {
         failure_type_counts: {},
         model_failures: 0,
         recent_runs: [],
+        diagnosis_timing: {
+          sessions_count: 0,
+          manual_completed_sessions: 0,
+          assisted_completed_sessions: 0,
+          median_diagnosis_duration_sec_manual: null,
+          median_diagnosis_duration_sec_assisted: null,
+          median_time_to_first_insight_sec_manual: null,
+          median_time_to_first_insight_sec_assisted: null,
+          median_delta_sec_assisted_vs_manual: null,
+          percent_reduction_vs_manual: null,
+          evidence_tier: 'insufficient',
+          evidence_tier_note: null,
+          framework_note: '',
+        },
+        llm_reduction: {
+          matched_workloads: [],
+          workload_count: 0,
+          median_llm_judge_reduction_pct_across_workloads: null,
+          evidence_tier: 'sparse',
+          evidence_tier_note: '',
+          validity_note: '',
+        },
       }),
       dashboardAnalytics: vi.fn().mockResolvedValue({
         time_series: [],

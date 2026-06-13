@@ -6,6 +6,10 @@ Measure how chunk size and top-k jointly affect retrieval quality, context cover
 
 All numbers are measured from stored PostgreSQL run traces — no synthetic or estimated metrics.
 
+**Scale / evidence packs (separate from this doc):** The repo includes a **52-query** deterministic benchmark (`scale_rag_engineering_v1`, `scripts/seed_scale_benchmark.py`) plus dashboard **diagnosis timing** and **matched LLM-judge reduction** sections that read only from persisted rows. Any headline like “150+ runs across 50+ queries” is safe **only after** you have executed seeds + batches and verified counts in `GET /runs/dashboard-summary` — not from static copy.
+
+**Diagnosis timing study design:** `scripts/list_diagnosis_candidates.py` (with `app/services/diagnosis_experiment_design.py`) proposes a **20-run** balanced plan (10 manual + 10 assisted; 4/3/2/1 slots per bucket per mode when enough distinct failure-bucket coverage exists). If the database has few completed evaluated runs or bucket diversity is thin, the CLI prints **warnings** and may assign fewer than 20 slots — export the plan only after reviewing warnings. Execute sessions in the UI (`/runs/:id`) using **manual** vs **assisted** modes as labeled in the export.
+
 **Dashboard note:** Histograms of `failure_type` in the UI count **evaluation** labels (e.g. `RETRIEVAL_PARTIAL`), not the same thing as run `status` **failed** (system/pipeline failures).
 
 **Latency:** Numbers below are from a **local** run batch. Cold-start and cache-warm effects can dominate early runs; averages are **not** a clean performance benchmark. Prefer directional comparison (e.g. config A vs B on the same machine) over treating any “low ms” row as a score. In the app, the latency distribution panel shows a **skew warning**, a **median vs average** note, per-phase **insufficient-sample** copy when **&lt;5** timed runs exist for that phase, and **low-sample** / **high-variance** badges when thresholds apply — the same caveats apply to this document’s tables.
@@ -121,3 +125,17 @@ python scripts/export_rag_systems_benchmark_summary.py
 ```
 
 To refresh numbers, paste the output of `export_rag_systems_benchmark_summary.py` into the **Measured Results** table.
+
+---
+
+## Scale Benchmark (52-query contract)
+
+A separate deterministic benchmark exists at `scripts/run_scale_evidence_pipeline.py` — **52 queries × 2 configs × N reps** (default 2 → 208 traced runs). This pipeline:
+
+1. Seeds the `scale_rag_engineering_v1` dataset (52 topics, idempotent)
+2. Executes batch benchmark runs with full trace instrumentation
+3. Verifies dashboard counts: total_runs, unique_query_cases, traced_runs, configs_tested
+
+Evidence orchestration scripts also cover **matched LLM-judge reduction** (`scripts/run_llm_reduction_evidence.py`, requires API key) and **diagnosis timing experiment DX** (`scripts/list_diagnosis_candidates.py`).
+
+See `docs/decisions.md` § "Evidence orchestration" for gating tiers and honest evidence rules.

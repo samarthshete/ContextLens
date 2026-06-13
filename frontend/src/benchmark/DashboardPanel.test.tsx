@@ -4,7 +4,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConfigComparisonMetrics, DashboardSummaryResponse, Dataset } from '../api/types'
 import { emptyConfigComparisonBoth, nullScoreSummary } from './configComparisonMock'
-import { DashboardPanel, pickLatestDatasetId } from './DashboardPanel'
+import { DashboardPanel } from './DashboardPanel'
+import { pickLatestDatasetId } from './DashboardPanel.utils'
 import * as exportDownload from './exportDownload'
 
 vi.mock('../api/client', async (importOriginal) => {
@@ -78,8 +79,12 @@ function minimalCompareRow(over: Partial<ConfigComparisonMetrics> = {}): ConfigC
   }
 }
 
-function buildRepeatedSamplingNote(totalRuns: number, uniqueQueries: number): string {
-  return `${totalRuns} runs across ${uniqueQueries} unique queries (repeated sampling; results are directional, not broad generalization)`
+function buildRepeatedSamplingNote(
+  totalRuns: number,
+  uniqueInSlice: number,
+  registeredQueries: number,
+): string {
+  return `${totalRuns} runs across ${uniqueInSlice} unique query cases in this slice (${registeredQueries} query cases registered); repeated sampling makes run count exceed unique queries when cells repeat the same cases.`
 }
 
 function minimalDashboard(over: Partial<DashboardSummaryResponse> = {}): DashboardSummaryResponse {
@@ -93,6 +98,7 @@ function minimalDashboard(over: Partial<DashboardSummaryResponse> = {}): Dashboa
       configs_tested: 1,
       documents_processed: 2,
       chunks_indexed: 8,
+      unique_query_cases_with_runs: 1,
     },
     status_counts: { completed: 1, failed: 0, in_progress: 0 },
     evaluator_counts: { heuristic_runs: 1, llm_runs: 0, runs_without_evaluation: 0 },
@@ -131,10 +137,37 @@ function minimalDashboard(over: Partial<DashboardSummaryResponse> = {}): Dashboa
         failure_type: 'UNKNOWN',
       },
     ],
+    diagnosis_timing: {
+      sessions_count: 0,
+      manual_completed_sessions: 0,
+      assisted_completed_sessions: 0,
+      median_diagnosis_duration_sec_manual: null,
+      median_diagnosis_duration_sec_assisted: null,
+      median_time_to_first_insight_sec_manual: null,
+      median_time_to_first_insight_sec_assisted: null,
+      median_delta_sec_assisted_vs_manual: null,
+      percent_reduction_vs_manual: null,
+      evidence_tier: 'insufficient',
+      evidence_tier_note: 'Fewer than 5 completed sessions in one or both modes — insufficient evidence.',
+      framework_note:
+        'Diagnosis timing is measured from persisted sessions only; no default or fabricated improvement is shown.',
+    },
+    llm_reduction: {
+      matched_workloads: [],
+      workload_count: 0,
+      median_llm_judge_reduction_pct_across_workloads: null,
+      evidence_tier: 'sparse',
+      evidence_tier_note: 'Fewer than 3 matched workload arms — not meaningful.',
+      validity_note: '',
+    },
     ...over,
   }
   if (over.repeated_sampling_note === undefined) {
-    merged.repeated_sampling_note = buildRepeatedSamplingNote(merged.total_runs, merged.scale.total_queries)
+    merged.repeated_sampling_note = buildRepeatedSamplingNote(
+      merged.total_runs,
+      merged.scale.unique_query_cases_with_runs,
+      merged.scale.total_queries,
+    )
   }
   return merged
 }

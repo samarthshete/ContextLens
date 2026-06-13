@@ -7,6 +7,12 @@ describe('describeApiError', () => {
     expect(describeApiError(new ApiError(503, 'claude_api_key missing'))).toBe('LLM not configured')
   })
 
+  it('keeps non-LLM 503 details visible', () => {
+    expect(describeApiError(new ApiError(503, 'Run #12 was marked failed because the job queue was unavailable.'))).toContain(
+      'job queue',
+    )
+  })
+
   it('maps 404 to Invalid selection', () => {
     expect(describeApiError(new ApiError(404, 'Document not found.'))).toBe('Invalid selection')
   })

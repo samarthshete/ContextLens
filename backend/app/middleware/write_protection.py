@@ -19,6 +19,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from app.config import settings
+from app.request_context import REQUEST_ID_HEADER, get_request_id
 
 
 def _configured_write_key() -> str:
@@ -51,8 +52,18 @@ class WriteProtectionMiddleware(BaseHTTPMiddleware):
 
         header = request.headers.get("X-ContextLens-Write-Key") or ""
         if not _constant_time_key_match(key, header):
+            request_id = getattr(request.state, "request_id", None) or get_request_id() or ""
             return JSONResponse(
                 status_code=403,
-                content={"detail": "write_key_required"},
+                content={
+                    "detail": "write_key_required",
+                    "error": {
+                        "code": "write_key_required",
+                        "message": "write_key_required",
+                        "retryable": False,
+                        "request_id": request_id,
+                    },
+                },
+                headers={REQUEST_ID_HEADER: request_id} if request_id else None,
             )
         return await call_next(request)

@@ -53,7 +53,7 @@ export interface DocumentChunk {
 export interface RunCreateBody {
   query_case_id: number
   pipeline_config_id: number
-  eval_mode: 'heuristic' | 'full'
+  eval_mode: 'heuristic' | 'full' | 'full_hybrid'
   document_id?: number | null
 }
 
@@ -178,6 +178,46 @@ export interface DashboardScaleMetrics {
   configs_tested: number
   documents_processed: number
   chunks_indexed: number
+  /** Distinct `query_case_id` on runs in the active dashboard slice. */
+  unique_query_cases_with_runs: number
+}
+
+export type DiagnosisTimingEvidenceTier = 'insufficient' | 'limited' | 'normal'
+
+export interface DashboardDiagnosisTimingEvidence {
+  sessions_count: number
+  manual_completed_sessions: number
+  assisted_completed_sessions: number
+  median_diagnosis_duration_sec_manual: number | null
+  median_diagnosis_duration_sec_assisted: number | null
+  median_time_to_first_insight_sec_manual: number | null
+  median_time_to_first_insight_sec_assisted: number | null
+  median_delta_sec_assisted_vs_manual: number | null
+  percent_reduction_vs_manual: number | null
+  evidence_tier: DiagnosisTimingEvidenceTier
+  evidence_tier_note: string | null
+  framework_note: string
+}
+
+export type LlmReductionEvidenceTier = 'sparse' | 'directional' | 'normal'
+
+export interface DashboardLlmReductionWorkloadRow {
+  matched_workload_id: string
+  dataset_id: number | null
+  llm_only_runs: number
+  hybrid_runs: number
+  avg_llm_judge_calls_llm_only: number
+  avg_llm_judge_calls_hybrid: number
+  llm_judge_reduction_pct: number
+}
+
+export interface DashboardLlmReductionEvidence {
+  matched_workloads: DashboardLlmReductionWorkloadRow[]
+  workload_count: number
+  median_llm_judge_reduction_pct_across_workloads: number | null
+  evidence_tier: LlmReductionEvidenceTier
+  evidence_tier_note: string
+  validity_note: string
 }
 
 export interface DashboardLatencySummary {
@@ -236,6 +276,22 @@ export interface DashboardSummaryResponse {
   /** Evaluation rows (organic runs) with failure_type set and not NO_FAILURE. */
   model_failures: number
   recent_runs: DashboardRecentRun[]
+  diagnosis_timing: DashboardDiagnosisTimingEvidence
+  llm_reduction: DashboardLlmReductionEvidence
+}
+
+export interface DiagnosisTimingSession {
+  id: number
+  run_id: number
+  mode: 'manual' | 'assisted'
+  started_at: string
+  first_meaningful_insight_at: string | null
+  completed_at: string | null
+  resolution_label: string | null
+  notes: string | null
+  session_key: string | null
+  synthetic: boolean
+  created_at: string
 }
 
 /** Run detail — aligned with `RunDetailResponse` (JSON). */
@@ -286,6 +342,7 @@ export interface RunDetail {
   created_at: string
   /** Batch / experiment tags when backend persists ``runs.metadata_json``. */
   metadata_json?: Record<string, unknown> | null
+  trace_instrumentation_json?: Record<string, unknown> | null
   retrieval_latency_ms: number | null
   generation_latency_ms: number | null
   evaluation_latency_ms: number | null

@@ -14,6 +14,7 @@ import { DashboardTrendPanel } from './DashboardTrendPanel'
 import { LatencyDistributionPanel } from './LatencyDistributionPanel'
 import { FailureBreakdownPanel } from './FailureBreakdownPanel'
 import { ConfigInsightsBucketSection } from './ConfigInsightsPanel'
+import { pickLatestDatasetId } from './DashboardPanel.utils'
 import {
   buildDashboardExportBundle,
   buildDashboardExportCsv,
@@ -30,13 +31,6 @@ function formatWhen(iso: string): string {
   } catch {
     return iso
   }
-}
-
-/** Default dashboard selection: newest registry row by `created_at`. */
-export function pickLatestDatasetId(datasets: Dataset[]): number | null {
-  if (datasets.length === 0) return null
-  const sorted = [...datasets].sort((a, b) => b.created_at.localeCompare(a.created_at))
-  return sorted[0]!.id
 }
 
 function RunStatusBadge({ status }: { status: string }) {
@@ -458,13 +452,77 @@ export function DashboardPanel({
               <span className="cl-dash-stat-label">Chunks stored</span>
               <span className="cl-dash-stat-value">{data.scale.chunks_indexed}</span>
             </div>
+            <div className="cl-dash-stat">
+              <span className="cl-dash-stat-label">Unique queries (in slice)</span>
+              <span className="cl-dash-stat-value">{data.scale.unique_query_cases_with_runs}</span>
+            </div>
           </section>
           <p className="cl-muted cl-dash-scale-note">
-            <strong>Traced runs</strong> = runs with at least one persisted retrieval hit and one evaluation row
-            (same definition as metrics aggregate). <strong>Configs in runs</strong> = distinct{' '}
-            <code>pipeline_config_id</code> on run rows. <strong>Chunks stored</strong> = rows in{' '}
-            <code>chunks</code> (ingested segments; aligns with aggregate <code>chunk_count</code>).
+            <strong>Traced runs</strong> = runs with at least one persisted <code>evaluation_results</code> row in
+            this slice (dashboard summary). <strong>Unique queries (in slice)</strong> = distinct{' '}
+            <code>query_case_id</code> on those runs. <strong>Query cases</strong> = registered rows in{' '}
+            <code>query_cases</code> (inventory; can exceed unique queries in slice if some cases were never run).{' '}
+            <strong>Configs in runs</strong> = distinct <code>pipeline_config_id</code>. <strong>Chunks stored</strong>{' '}
+            = rows in <code>chunks</code>.
           </p>
+
+          <section
+            className="cl-card cl-dash-evidence-block"
+            aria-label="Evidence metrics"
+            data-testid="dashboard-evidence-metrics"
+          >
+            <h3>Measured evidence (no fabricated defaults)</h3>
+            <div className="cl-dash-evidence-cols">
+              <div>
+                <h4 className="cl-h4">Diagnosis timing</h4>
+                <p className="cl-muted">{data.diagnosis_timing.framework_note}</p>
+                <p>
+                  Tier: <strong>{data.diagnosis_timing.evidence_tier}</strong>
+                  {data.diagnosis_timing.evidence_tier_note
+                    ? ` — ${data.diagnosis_timing.evidence_tier_note}`
+                    : ''}
+                </p>
+                <ul className="cl-dash-evidence-list">
+                  <li>Sessions (non-synthetic): {data.diagnosis_timing.sessions_count}</li>
+                  <li>Manual completed: {data.diagnosis_timing.manual_completed_sessions}</li>
+                  <li>Assisted completed: {data.diagnosis_timing.assisted_completed_sessions}</li>
+                  <li>
+                    Median duration (manual / assisted):{' '}
+                    {data.diagnosis_timing.median_diagnosis_duration_sec_manual ?? '—'} /{' '}
+                    {data.diagnosis_timing.median_diagnosis_duration_sec_assisted ?? '—'} sec
+                  </li>
+                  {data.diagnosis_timing.percent_reduction_vs_manual != null ? (
+                    <li>Assisted vs manual (median): {data.diagnosis_timing.percent_reduction_vs_manual.toFixed(1)}%</li>
+                  ) : null}
+                </ul>
+              </div>
+              <div>
+                <h4 className="cl-h4">LLM judge calls (matched workloads)</h4>
+                <p className="cl-muted">{data.llm_reduction.validity_note}</p>
+                <p>
+                  Tier: <strong>{data.llm_reduction.evidence_tier}</strong> — {data.llm_reduction.evidence_tier_note}
+                </p>
+                <p>
+                  Matched workloads: <strong>{data.llm_reduction.workload_count}</strong>
+                  {data.llm_reduction.median_llm_judge_reduction_pct_across_workloads != null
+                    ? ` · median reduction across workloads: ${data.llm_reduction.median_llm_judge_reduction_pct_across_workloads.toFixed(2)}%`
+                    : ''}
+                </p>
+                {data.llm_reduction.matched_workloads.length > 0 ? (
+                  <ul className="cl-dash-evidence-list">
+                    {data.llm_reduction.matched_workloads.slice(0, 5).map((w) => (
+                      <li key={w.matched_workload_id}>
+                        {w.matched_workload_id.slice(0, 8)}… — llm_only {w.llm_only_runs} vs hybrid {w.hybrid_runs}{' '}
+                        runs · Δ judge calls {w.llm_judge_reduction_pct.toFixed(1)}%
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="cl-muted">No matched workload pairs yet (tag batch runs with matched metadata).</p>
+                )}
+              </div>
+            </div>
+          </section>
 
           <section className="cl-dash-grid" aria-label="Run counts">
             <div className="cl-dash-stat">

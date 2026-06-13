@@ -62,6 +62,7 @@ function tinySummary(): DashboardSummaryResponse {
       configs_tested: 2,
       documents_processed: 1,
       chunks_indexed: 5,
+      unique_query_cases_with_runs: 2,
     },
     status_counts: { completed: 2, failed: 0, in_progress: 0 },
     evaluator_counts: { heuristic_runs: 2, llm_runs: 0, runs_without_evaluation: 0 },
@@ -100,6 +101,28 @@ function tinySummary(): DashboardSummaryResponse {
         failure_type: 'UNKNOWN',
       },
     ],
+    diagnosis_timing: {
+      sessions_count: 0,
+      manual_completed_sessions: 0,
+      assisted_completed_sessions: 0,
+      median_diagnosis_duration_sec_manual: null,
+      median_diagnosis_duration_sec_assisted: null,
+      median_time_to_first_insight_sec_manual: null,
+      median_time_to_first_insight_sec_assisted: null,
+      median_delta_sec_assisted_vs_manual: null,
+      percent_reduction_vs_manual: null,
+      evidence_tier: 'insufficient',
+      evidence_tier_note: null,
+      framework_note: 'x',
+    },
+    llm_reduction: {
+      matched_workloads: [],
+      workload_count: 0,
+      median_llm_judge_reduction_pct_across_workloads: null,
+      evidence_tier: 'sparse',
+      evidence_tier_note: 'n',
+      validity_note: 'v',
+    },
   }
 }
 
@@ -236,6 +259,9 @@ describe('exportDownload', () => {
     expect(csv).toContain('end_to_end_run_latency_avg_sec,0.02')
     expect(csv).toContain('scale_benchmark_datasets,1')
     expect(csv).toContain('scale_chunks_indexed,5')
+    expect(csv).toContain('scale_unique_query_cases_with_runs,2')
+    expect(csv).toContain('diagnosis_evidence_tier,insufficient')
+    expect(csv).toContain('llm_reduction_evidence_tier,sparse')
     expect(csv).toContain('cost_llm_runs_with_measured_cost,0')
     expect(csv).toContain('cost_full_rag_runs_with_measured_cost,0')
     expect(csv).toContain('model_failures,1')

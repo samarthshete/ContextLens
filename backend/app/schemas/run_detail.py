@@ -71,6 +71,8 @@ class RunDetailResponse(BaseModel):
     created_at: datetime
     metadata_json: dict[str, Any] | None = None
     """Batch / experiment tags (``batch_id``, ``experiment_name``, …) when present on the run row."""
+    trace_instrumentation_json: dict[str, Any] | None = None
+    """Persisted evaluation/LLM counters (when migration ``0008`` applied)."""
     retrieval_latency_ms: int | None = None
     generation_latency_ms: int | None = None
     evaluation_latency_ms: int | None = None

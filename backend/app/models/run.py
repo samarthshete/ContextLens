@@ -33,6 +33,7 @@ class Run(Base):
     total_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     metadata_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    trace_instrumentation_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -56,5 +57,10 @@ class Run(Base):
         "GenerationResult",
         back_populates="run",
         uselist=False,
+        cascade="all, delete-orphan",
+    )
+    diagnosis_timing_sessions = relationship(
+        "DiagnosisTimingSession",
+        back_populates="run",
         cascade="all, delete-orphan",
     )

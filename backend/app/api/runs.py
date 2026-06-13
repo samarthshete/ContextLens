@@ -4,18 +4,23 @@ from typing import Literal
 
 import anthropic
 from openai import APIError as OpenAIAPIError
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from redis.exceptions import RedisError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Dataset
+from app.models import Dataset, DiagnosisTimingSession
 from app.queue.full_run import enqueue_full_benchmark_run
 from app.schemas.config_comparison import ConfigComparisonResponse
 from app.schemas.dashboard_analytics import DashboardAnalyticsResponse
 from app.schemas.dashboard_summary import DashboardSummaryResponse
+from app.schemas.diagnosis_timing import (
+    DiagnosisTimingSessionCreate,
+    DiagnosisTimingSessionOut,
+    DiagnosisTimingSessionPatch,
+)
 from app.schemas.run_create import RunCreateRequest, RunCreateResponse
 from app.schemas.run_detail import RunDetailResponse
 from app.schemas.run_list import RunListResponse
@@ -23,6 +28,12 @@ from app.schemas.run_queue_status import RunQueueStatusResponse
 from app.schemas.run_requeue import RunRequeueResponse
 from app.services import trace_persistence as tp
 from app.services.config_comparison import compare_pipeline_configs
+from app.services.diagnosis_timing import (
+    DiagnosisSessionNotFoundError,
+    create_diagnosis_session,
+    list_diagnosis_sessions_for_run,
+    patch_diagnosis_session,
+)
 from app.services.run_create import (
     DocumentNotFoundError,
     FullModeNotConfiguredError,
@@ -32,7 +43,7 @@ from app.services.run_create import (
     validate_run_create_prerequisites,
 )
 from app.services.run_detail import get_run_detail
-from app.services.run_lifecycle import STATUS_RUNNING
+from app.services.run_lifecycle import STATUS_FAILED, STATUS_RUNNING
 from app.services.dashboard_analytics import get_dashboard_analytics
 from app.services.dashboard_summary import get_dashboard_summary
 from app.services.run_list import list_runs
@@ -174,6 +185,7 @@ async def list_runs_endpoint(
 )
 async def create_run_endpoint(
     body: RunCreateRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> RunCreateResponse | JSONResponse:
     """Create a run: heuristic finishes inline (201); full returns 202 and enqueues an RQ job."""
@@ -194,23 +206,41 @@ async def create_run_endpoint(
     except FullModeNotConfiguredError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
 
-    if body.eval_mode == "full":
+    if body.eval_mode in ("full", "full_hybrid"):
+        request_id = getattr(request.state, "request_id", None)
+        run_meta: dict = {}
+        if request_id:
+            run_meta["request_id"] = request_id
+        if body.eval_mode == "full_hybrid":
+            run_meta["evaluator_execution_mode"] = "hybrid"
+        elif body.eval_mode == "full":
+            run_meta["evaluator_execution_mode"] = "llm_only"
         run = await tp.create_run(
             db,
             query_case_id=body.query_case_id,
             pipeline_config_id=body.pipeline_config_id,
             status=STATUS_RUNNING,
+            metadata_json=run_meta,
         )
         await db.commit()
         await db.refresh(run)
         try:
             job_id = enqueue_full_benchmark_run(run.id, body.document_id)
         except RedisError as e:
+            run.status = STATUS_FAILED
+            meta = dict(run.metadata_json or {})
+            meta["queue_enqueue_failed"] = True
+            meta["queue_error"] = str(e)
+            if request_id:
+                meta["request_id"] = request_id
+            run.metadata_json = meta
+            await db.commit()
             raise HTTPException(
                 status_code=503,
                 detail=(
-                    "Job queue unavailable (Redis). Start Redis and an RQ worker "
-                    "(queue `contextlens_full_run`; see backend README)."
+                    f"Run #{run.id} was marked failed because the job queue was unavailable "
+                    "(Redis). Start Redis and an RQ worker (queue `contextlens_full_run`; "
+                    "see backend README)."
                 ),
             ) from e
         payload = RunCreateResponse(
@@ -308,6 +338,75 @@ async def get_run_queue_status_endpoint(
             status_code=503,
             detail="Redis unavailable; cannot inspect queue or lock (see docs/DEV_FULL_RUN_QUEUE.md).",
         ) from exc
+
+
+@router.get(
+    "/{run_id:int}/diagnosis-timing-sessions",
+    response_model=list[DiagnosisTimingSessionOut],
+    summary="List diagnosis timing sessions for a run",
+)
+async def list_diagnosis_timing_sessions_endpoint(
+    run_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> list[DiagnosisTimingSessionOut]:
+    try:
+        rows = await list_diagnosis_sessions_for_run(db, run_id=run_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Run not found.") from None
+    return [DiagnosisTimingSessionOut.model_validate(r) for r in rows]
+
+
+@router.post(
+    "/{run_id:int}/diagnosis-timing-sessions",
+    response_model=DiagnosisTimingSessionOut,
+    status_code=201,
+    summary="Start a diagnosis timing session",
+)
+async def create_diagnosis_timing_session_endpoint(
+    run_id: int,
+    body: DiagnosisTimingSessionCreate,
+    db: AsyncSession = Depends(get_db),
+) -> DiagnosisTimingSessionOut:
+    try:
+        row = await create_diagnosis_session(
+            db,
+            run_id=run_id,
+            mode=body.mode,
+            started_at=body.started_at,
+            session_key=body.session_key,
+            synthetic=body.synthetic,
+        )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Run not found.") from None
+    return DiagnosisTimingSessionOut.model_validate(row)
+
+
+@router.patch(
+    "/{run_id:int}/diagnosis-timing-sessions/{session_id:int}",
+    response_model=DiagnosisTimingSessionOut,
+    summary="Update timestamps / resolution on a diagnosis timing session",
+)
+async def patch_diagnosis_timing_session_endpoint(
+    run_id: int,
+    session_id: int,
+    body: DiagnosisTimingSessionPatch,
+    db: AsyncSession = Depends(get_db),
+) -> DiagnosisTimingSessionOut:
+    row = await db.get(DiagnosisTimingSession, session_id)
+    if row is None or row.run_id != run_id:
+        raise HTTPException(status_code=404, detail="Session not found for this run.") from None
+    try:
+        updated = await patch_diagnosis_session(
+            db,
+            session_id=session_id,
+            first_meaningful_insight_at=body.first_meaningful_insight_at,
+            completed_at=body.completed_at,
+            resolution_label=body.resolution_label,
+            notes=body.notes,
+        )
+    except DiagnosisSessionNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found.") from None
+    return DiagnosisTimingSessionOut.model_validate(updated)
 
 
 @router.get("/{run_id:int}", response_model=RunDetailResponse)
