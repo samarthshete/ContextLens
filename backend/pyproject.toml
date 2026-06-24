@@ -17,7 +17,6 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "pypdf>=5.0.0",
     "python-multipart>=0.0.9",
-    "sentence-transformers>=3.0.0",
     "redis>=5.0.0",
     "rq>=2.0.0",
 ]

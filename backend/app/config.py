@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
 
     # Models
-    embedding_model_name: str = "all-MiniLM-L6-v2"
+    embedding_model_name: str = "text-embedding-3-small"
     generation_model_name: str = "gpt-4o-mini"
     evaluation_model_name: str = "gpt-4o-mini"
 
