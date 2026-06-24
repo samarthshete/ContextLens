@@ -23,6 +23,7 @@ envVarGroups:
 databases:
   - name: contextlens-pg
     databaseName: contextlens
+    plan: free
     postgresMajorVersion: "16"
 
 services:
@@ -37,10 +38,13 @@ services:
   - type: web
     name: contextlens-api
     runtime: docker
+    plan: free
     rootDir: backend
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
-    preDeployCommand: alembic upgrade head
+    # Free instances don't support preDeployCommand, so run migrations at startup
+    # before launching uvicorn. (CREATE EXTENSION vector runs inside Alembic.)
+    dockerCommand: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -63,24 +67,29 @@ services:
       - key: UPLOAD_DIR
         value: /tmp/contextlens-uploads
 
-  - type: worker
-    name: contextlens-worker
-    runtime: docker
-    rootDir: backend
-    dockerfilePath: ./Dockerfile
-    dockerCommand: ./scripts/rq_worker.sh
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: contextlens-pg
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          type: keyvalue
-          name: contextlens-redis
-          property: connectionString
-      - key: LLM_PROVIDER
-        value: openai
-      - fromGroup: contextlens-llm
-      - key: UPLOAD_DIR
-        value: /tmp/contextlens-uploads
+  # Background worker — Render has NO free tier for background workers, so it is
+  # disabled for the free deployment. The worker only processes *full* benchmark
+  # runs (RQ queue `contextlens_full_run`); the API/UI/dashboards work without it.
+  # Re-enable (and pick a paid `plan`) to process queued full runs end-to-end.
+  # - type: worker
+  #   name: contextlens-worker
+  #   runtime: docker
+  #   plan: starter
+  #   rootDir: backend
+  #   dockerfilePath: ./Dockerfile
+  #   dockerCommand: ./scripts/rq_worker.sh
+  #   envVars:
+  #     - key: DATABASE_URL
+  #       fromDatabase:
+  #         name: contextlens-pg
+  #         property: connectionString
+  #     - key: REDIS_URL
+  #       fromService:
+  #         type: keyvalue
+  #         name: contextlens-redis
+  #         property: connectionString
+  #     - key: LLM_PROVIDER
+  #       value: openai
+  #     - fromGroup: contextlens-llm
+  #     - key: UPLOAD_DIR
+  #       value: /tmp/contextlens-uploads
