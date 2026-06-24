@@ -216,18 +216,17 @@ describe('client-side routing', () => {
     })
   })
 
-  it('/compare renders the Config comparison view', async () => {
+  it('/compare renders the Compare Pipeline Configs view', async () => {
     renderWithRoute('/compare')
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Config comparison', level: 2 })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Compare Pipeline Configs', level: 2 })).toBeInTheDocument()
     })
   })
 
-  it('/dashboard renders the Dashboard observability view', async () => {
+  it('/dashboard renders the RAG Evaluation Overview view', async () => {
     renderWithRoute('/dashboard')
     await waitFor(() => {
-      // DashboardPanel renders "Observability" as its main heading
-      expect(screen.getByRole('heading', { name: 'Observability', level: 2 })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'RAG Evaluation Overview', level: 2 })).toBeInTheDocument()
     })
   })
 
@@ -341,13 +340,13 @@ describe('client-side routing', () => {
   it('nav buttons reflect active view from URL', async () => {
     renderWithRoute('/compare')
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Config comparison', level: 2 })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Compare Pipeline Configs', level: 2 })).toBeInTheDocument()
     })
-    // Config comparison nav button should be active
-    const compareBtn = screen.getByRole('button', { name: 'Config comparison' })
+    // Compare nav button should be active
+    const compareBtn = screen.getByRole('button', { name: 'Compare' })
     expect(compareBtn).toHaveAttribute('data-active', 'true')
     // Other nav buttons should be inactive
-    const runsBtn = screen.getAllByRole('button', { name: 'Recent runs' })[0]
+    const runsBtn = screen.getAllByRole('button', { name: 'Runs' })[0]
     expect(runsBtn).toHaveAttribute('data-active', 'false')
   })
 })

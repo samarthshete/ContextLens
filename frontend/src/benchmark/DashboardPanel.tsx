@@ -16,6 +16,16 @@ import { FailureBreakdownPanel } from './FailureBreakdownPanel'
 import { ConfigInsightsBucketSection } from './ConfigInsightsPanel'
 import { pickLatestDatasetId } from './DashboardPanel.utils'
 import {
+  DataTable,
+  EmptyState,
+  ErrorState,
+  FailureBadge,
+  MetricCard,
+  ScoreBadge,
+  SectionHeader,
+  StatusBadge,
+} from './ui'
+import {
   buildDashboardExportBundle,
   buildDashboardExportCsv,
   dashboardExportCsvFilename,
@@ -31,15 +41,6 @@ function formatWhen(iso: string): string {
   } catch {
     return iso
   }
-}
-
-function RunStatusBadge({ status }: { status: string }) {
-  const cls = `cl-run-badge cl-run-badge--${status.replace(/_/g, '-')}`
-  return (
-    <span className={cls} title={status}>
-      {status.replace(/_/g, ' ')}
-    </span>
-  )
 }
 
 function ComparisonReliabilityBanner({ result }: { result: ConfigComparisonResponse }) {
@@ -205,6 +206,37 @@ export type DashboardPanelProps = {
 
 const MAX_COMPARE_IDS = 12
 
+function qualityScoreFromSummary(data: DashboardSummaryResponse): number | null {
+  const noFailure = data.failure_type_counts.NO_FAILURE ?? 0
+  const labeledFailures = Object.entries(data.failure_type_counts)
+    .filter(([k]) => k !== 'NO_FAILURE')
+    .reduce((sum, [, count]) => sum + count, 0)
+  const totalLabels = noFailure + labeledFailures
+  if (totalLabels === 0) return null
+  return noFailure / totalLabels
+}
+
+function topFailureLabel(data: DashboardSummaryResponse): string | null {
+  return (
+    Object.entries(data.failure_type_counts)
+      .filter(([k]) => k !== 'NO_FAILURE')
+      .sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+  )
+}
+
+function failurePercent(count: number, entries: Array<[string, number]>): number {
+  const total = entries.reduce((sum, [, value]) => sum + value, 0)
+  if (total <= 0) return 0
+  return Math.round((100 * count) / total)
+}
+
+function diagnosisHeadline(data: DashboardSummaryResponse): string {
+  const top = topFailureLabel(data)
+  if (!top) return 'No dominant model-quality failure in this slice.'
+  const count = data.failure_type_counts[top] ?? 0
+  return `${top.replace(/_/g, ' ')} leads the failure mix (${count} run${count === 1 ? '' : 's'}).`
+}
+
 export function DashboardPanel({
   pipelineConfigIds,
   datasets,
@@ -297,13 +329,14 @@ export function DashboardPanel({
   const failureEntries = data
     ? Object.entries(data.failure_type_counts).sort((a, b) => b[1] - a[1])
     : []
+  const qualityScore = data ? qualityScoreFromSummary(data) : null
+  const topFailure = data ? topFailureLabel(data) : null
 
   if (registryLoading) {
     return (
       <div className="cl-dashboard">
-        <p className="cl-loading" data-testid="dashboard-registry-loading" aria-live="polite">
-          Loading benchmark registry…
-        </p>
+        <EmptyState title="Loading benchmark registry" detail="Preparing datasets and pipeline configs…" />
+        <p className="cl-loading" data-testid="dashboard-registry-loading" aria-live="polite" />
       </div>
     )
   }
@@ -312,13 +345,23 @@ export function DashboardPanel({
     return (
       <div className="cl-dashboard">
         <section className="cl-card cl-dash-header">
-          <h2>Observability</h2>
+          <SectionHeader
+            eyebrow="Overview"
+            title="RAG Evaluation Overview"
+            description="Connect a dataset to see traced runs, LLM judge scores, retrieval failures, and diagnosis evidence."
+          />
         </section>
         <section className="cl-card" aria-label="Dataset required">
-          <p className="cl-muted" data-testid="dashboard-select-dataset-msg">
-            <strong>Select dataset to view analytics.</strong> No benchmark datasets yet — create one under{' '}
-            <strong>Benchmark registry</strong> on the Run tab, then open the Dashboard again.
-          </p>
+          <div data-testid="dashboard-select-dataset-msg">
+            <EmptyState
+              title="No benchmark datasets yet"
+              detail={
+                <>
+                  Create one under <strong>Benchmark registry</strong> on the Run tab, then return here for analytics.
+                </>
+              }
+            />
+          </div>
         </section>
       </div>
     )
@@ -337,9 +380,17 @@ export function DashboardPanel({
   return (
     <div className="cl-dashboard">
       <section className="cl-card cl-dash-header">
-        <div className="cl-dash-header-row">
-          <h2>Observability</h2>
-          <div className="cl-dash-header-actions">
+        <SectionHeader
+          eyebrow="Overview"
+          title="RAG Evaluation Overview"
+          description={
+            <>
+              See whether retrieval found the right context, whether the generated answer was grounded, and which
+              failure modes are worth fixing first.
+            </>
+          }
+          actions={
+            <>
             <button
               type="button"
               className="cl-btn cl-btn-secondary cl-btn-sm"
@@ -389,8 +440,9 @@ export function DashboardPanel({
             >
               {loading ? 'Refreshing…' : 'Refresh'}
             </button>
-          </div>
-        </div>
+            </>
+          }
+        />
         <div className="cl-field cl-dash-dataset-field">
           <label htmlFor="dashboard-dataset-select">Benchmark dataset</label>
           <select
@@ -406,7 +458,7 @@ export function DashboardPanel({
             ))}
           </select>
         </div>
-        <p className="cl-muted">
+        <p className="cl-muted cl-dashboard-contract-note">
           Scoped to <strong>{datasetSummary}</strong> via <code>?dataset_id=</code> on{' '}
           <code>GET /api/v1/runs/dashboard-summary</code> and <code>…/dashboard-analytics</code>. Costs reflect
           stored <code>evaluation_results.cost_usd</code> (N/A when null — not the same as $0).
@@ -414,9 +466,7 @@ export function DashboardPanel({
       </section>
 
       {error ? (
-        <div className="cl-msg cl-msg-error" role="alert">
-          {error}
-        </div>
+        <ErrorState message={error} />
       ) : null}
 
       {loading && !data ? (
@@ -427,35 +477,86 @@ export function DashboardPanel({
 
       {data && !error ? (
         <>
-          <section className="cl-dash-grid" aria-label="System scale" data-testid="dashboard-system-scale">
-            <div className="cl-dash-stat">
-              <span className="cl-dash-stat-label">Benchmark datasets</span>
-              <span className="cl-dash-stat-value">{data.scale.benchmark_datasets}</span>
+          <section className="cl-overview-hero" aria-label="Demo overview">
+            <div className="cl-overview-copy">
+              <p className="cl-eyebrow">Recruiter demo path</p>
+              <h3>RAG evals that explain what broke, where, and why.</h3>
+              <p>
+                Start with system health, find the dominant failure mode, then open a trace to inspect retrieved
+                evidence, generation, LLM judge scores, latency, and a recommended fix.
+              </p>
+              <div className="cl-overview-path" aria-label="Demo flow">
+                <span>Overview</span>
+                <span>Failure mix</span>
+                <span>Trace diagnosis</span>
+              </div>
             </div>
-            <div className="cl-dash-stat">
-              <span className="cl-dash-stat-label">Query cases</span>
-              <span className="cl-dash-stat-value">{data.scale.total_queries}</span>
+            <div className="cl-overview-proof">
+              <MetricCard label="Portfolio corpus" value="208" detail="traced runs" tone="info" />
+              <MetricCard label="Benchmark scope" value="52" detail="query cases" />
+              <MetricCard label="Failure taxonomy" value="10" detail="categories" tone="warn" />
+              <MetricCard label="Judge mode" value="LLM" detail="faithfulness + completeness" tone="good" />
             </div>
-            <div className="cl-dash-stat">
-              <span className="cl-dash-stat-label">Traced runs</span>
-              <span className="cl-dash-stat-value">{data.scale.total_traced_runs}</span>
+          </section>
+
+          <section className="cl-dashboard-command-center" aria-label="System command center">
+            <div className="cl-card cl-system-panel">
+              <SectionHeader
+                eyebrow="System status"
+                title="Evaluation health"
+                description="A quick read on reliability, model quality, and whether the current slice has enough signal for a demo."
+              />
+              <div className="cl-system-health-grid">
+                <MetricCard label="Completed" value={data.status_counts.completed} detail={`${data.status_counts.in_progress} in progress`} tone="good" />
+                <MetricCard label="System failures" value={<span data-testid="dashboard-system-failures-count">{data.status_counts.failed}</span>} detail="pipeline did not complete" tone={data.status_counts.failed > 0 ? 'bad' : 'good'} />
+                <MetricCard label="Model failures" value={<span data-testid="dashboard-model-failures-count">{data.model_failures ?? 0}</span>} detail="non-NO_FAILURE labels" tone={data.model_failures > 0 ? 'warn' : 'good'} />
+                <MetricCard label="Avg quality" value={<ScoreBadge score={qualityScore} label="pass rate" />} detail="NO_FAILURE label share" tone={qualityScore == null ? 'neutral' : qualityScore >= 0.8 ? 'good' : qualityScore >= 0.6 ? 'warn' : 'bad'} />
+              </div>
+              <p className="cl-system-diagnosis">
+                <strong>{diagnosisHeadline(data)}</strong>{' '}
+                {topFailure ? 'Open an affected trace to inspect evidence and recommended fixes.' : 'Use the trace table to confirm judge coverage and retrieval quality.'}
+              </p>
             </div>
-            <div className="cl-dash-stat">
-              <span className="cl-dash-stat-label">Configs in runs</span>
-              <span className="cl-dash-stat-value">{data.scale.configs_tested}</span>
+
+            <div className="cl-card cl-failure-panel">
+              <SectionHeader
+                eyebrow="Failure distribution"
+                title="What is failing?"
+                description="Evaluation labels from organic runs, separated from infrastructure failures."
+              />
+              {failureEntries.length === 0 ? (
+                <EmptyState title="No failure labels yet" detail="Run evaluations to populate the taxonomy." />
+              ) : (
+                <div className="cl-failure-bars">
+                  {failureEntries.slice(0, 6).map(([label, count]) => {
+                    const pct = failurePercent(count, failureEntries)
+                    return (
+                      <div key={label} className="cl-failure-bar-row">
+                        <div className="cl-failure-bar-label">
+                          <FailureBadge failureType={label} />
+                          <span>{count}</span>
+                        </div>
+                        <div className="cl-failure-bar-track" aria-label={`${label}: ${pct}%`}>
+                          <span style={{ width: `${Math.max(pct, 4)}%` }} />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
-            <div className="cl-dash-stat">
-              <span className="cl-dash-stat-label">Documents processed</span>
-              <span className="cl-dash-stat-value">{data.scale.documents_processed}</span>
-            </div>
-            <div className="cl-dash-stat">
-              <span className="cl-dash-stat-label">Chunks stored</span>
-              <span className="cl-dash-stat-value">{data.scale.chunks_indexed}</span>
-            </div>
-            <div className="cl-dash-stat">
-              <span className="cl-dash-stat-label">Unique queries (in slice)</span>
-              <span className="cl-dash-stat-value">{data.scale.unique_query_cases_with_runs}</span>
-            </div>
+          </section>
+
+          <section className="cl-metric-grid cl-dashboard-kpis" aria-label="Run counts" data-testid="dashboard-system-scale">
+            <MetricCard label="Total runs" value={data.total_runs} detail="all run rows in this slice" tone="info" />
+            <MetricCard label="Benchmark datasets" value={data.scale.benchmark_datasets} detail="registered datasets" />
+            <MetricCard label="Benchmark queries" value={data.scale.total_queries} detail="registered query cases" />
+            <MetricCard label="Chunks stored" value={data.scale.chunks_indexed} detail="indexed retrieval chunks" />
+            <MetricCard label="Traced runs" value={data.scale.total_traced_runs} detail="persisted evaluation rows" tone="info" />
+            <MetricCard label="Failure categories" value={failureEntries.length || 10} detail={topFailure ? `Top: ${topFailure}` : 'taxonomy ready'} tone={topFailure ? 'warn' : 'good'} />
+            <MetricCard label="System failures" value={data.status_counts.failed} detail="failed run status" tone={data.status_counts.failed > 0 ? 'bad' : 'good'} />
+            <MetricCard label="Model failures" value={data.model_failures ?? 0} detail="non-NO_FAILURE labels" tone={data.model_failures > 0 ? 'warn' : 'good'} />
+            <MetricCard label="LLM judge rows" value={data.evaluator_counts.llm_runs} detail={`${data.evaluator_counts.heuristic_runs} heuristic rows`} tone="info" />
           </section>
           <p className="cl-muted cl-dash-scale-note">
             <strong>Traced runs</strong> = runs with at least one persisted <code>evaluation_results</code> row in
@@ -524,54 +625,6 @@ export function DashboardPanel({
             </div>
           </section>
 
-          <section className="cl-dash-grid" aria-label="Run counts">
-            <div className="cl-dash-stat">
-              <span className="cl-dash-stat-label">Total runs</span>
-              <span className="cl-dash-stat-value">{data.total_runs}</span>
-            </div>
-            <div className="cl-dash-stat">
-              <span className="cl-dash-stat-label">Completed</span>
-              <span className="cl-dash-stat-value">{data.status_counts.completed}</span>
-            </div>
-            <div className="cl-dash-stat">
-              <span
-                className="cl-dash-stat-label"
-                title="Runs whose pipeline exited with status failed (errors, exhausted retries, etc.)."
-              >
-                System failures
-              </span>
-              <span className="cl-dash-stat-value" data-testid="dashboard-system-failures-count">
-                {data.status_counts.failed}
-              </span>
-            </div>
-            <div className="cl-dash-stat">
-              <span
-                className="cl-dash-stat-label"
-                title="Evaluation rows where failure_type is set and not NO_FAILURE (retrieval/answer quality labels)."
-              >
-                Model failures
-              </span>
-              <span className="cl-dash-stat-value" data-testid="dashboard-model-failures-count">
-                {data.model_failures ?? 0}
-              </span>
-            </div>
-            <div className="cl-dash-stat">
-              <span className="cl-dash-stat-label">In progress</span>
-              <span className="cl-dash-stat-value">{data.status_counts.in_progress}</span>
-            </div>
-            <div className="cl-dash-stat">
-              <span className="cl-dash-stat-label">Heuristic (eval rows)</span>
-              <span className="cl-dash-stat-value">{data.evaluator_counts.heuristic_runs}</span>
-            </div>
-            <div className="cl-dash-stat">
-              <span className="cl-dash-stat-label">LLM (eval rows)</span>
-              <span className="cl-dash-stat-value">{data.evaluator_counts.llm_runs}</span>
-            </div>
-            <div className="cl-dash-stat cl-dash-stat-wide">
-              <span className="cl-dash-stat-label">Runs without evaluation</span>
-              <span className="cl-dash-stat-value">{data.evaluator_counts.runs_without_evaluation}</span>
-            </div>
-          </section>
           <p className="cl-muted cl-dash-scale-note">
             <strong>System failures</strong> = run <code>status</code> failed (pipeline did not complete successfully).{' '}
             <strong>Model failures</strong> = count of evaluation rows with a non–<code>NO_FAILURE</code> label (runs can
@@ -792,8 +845,7 @@ export function DashboardPanel({
             {failureEntries.length === 0 ? (
               <p className="cl-muted cl-empty-inline">No failure labels recorded on evaluations yet.</p>
             ) : (
-              <div className="cl-table-wrap">
-                <table className="cl-table">
+              <DataTable>
                   <thead>
                     <tr>
                       <th>Failure type</th>
@@ -804,14 +856,13 @@ export function DashboardPanel({
                     {failureEntries.map(([k, v]) => (
                       <tr key={k}>
                         <td>
-                          <strong>{k}</strong>
+                          <FailureBadge failureType={k} />
                         </td>
                         <td>{v}</td>
                       </tr>
                     ))}
                   </tbody>
-                </table>
-              </div>
+              </DataTable>
             )}
           </section>
 
@@ -820,8 +871,7 @@ export function DashboardPanel({
             {data.recent_runs.length === 0 ? (
               <p className="cl-muted cl-empty-inline">No runs in the database yet.</p>
             ) : (
-              <div className="cl-table-wrap">
-                <table className="cl-table">
+              <DataTable>
                   <thead>
                     <tr>
                       <th>ID</th>
@@ -840,12 +890,14 @@ export function DashboardPanel({
                         <td>{r.run_id}</td>
                         <td>{formatWhen(r.created_at)}</td>
                         <td>
-                          <RunStatusBadge status={r.status} />
+                          <StatusBadge status={r.status} />
                         </td>
                         <td>{r.evaluator_type}</td>
                         <td>{formatLatencyMs(r.total_latency_ms)}</td>
                         <td>{formatUsd(r.cost_usd)}</td>
-                        <td className="cl-td-wrap">{r.failure_type ?? '—'}</td>
+                        <td className="cl-td-wrap">
+                          <FailureBadge failureType={r.failure_type} />
+                        </td>
                         {onOpenRunDetail ? (
                           <td>
                             <button
@@ -860,8 +912,7 @@ export function DashboardPanel({
                       </tr>
                     ))}
                   </tbody>
-                </table>
-              </div>
+              </DataTable>
             )}
           </section>
 

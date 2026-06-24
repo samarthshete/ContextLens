@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api/client'
 import type {
-  ConfigComparisonMetrics,
   Dataset,
   DocumentListItem,
   DocumentResponse,
@@ -14,218 +13,26 @@ import type {
 import { describeApiError } from './errorMessage'
 import { isBenchmarkFormReady } from './formValidation'
 import { RegistryPanel, type RegistryNotice } from './RegistryPanel'
-import { RunQueuePanel } from './RunQueuePanel'
 import { UploadDocumentPanel } from './UploadDocumentPanel'
 import { DashboardPanel } from './DashboardPanel'
-import { ContextQualityPanel } from './ContextQualityPanel'
-import { GenerationJudgeInsightsPanel } from './GenerationJudgeInsightsPanel'
-import { RunDiffPanel } from './RunDiffPanel'
 import { documentTitleLookupMap } from './retrievalSourceFormat'
-import { RetrievalHitsSection } from './RetrievalHitsSection'
-import { RetrievalDiagnosisPanel } from './RetrievalDiagnosisPanel'
-import { RunDiagnosisSummary } from './RunDiagnosisSummary'
 import { DocumentDetailPanel } from './DocumentDetailPanel'
-import { DiagnosisTimingExperimentPanel } from './DiagnosisTimingExperimentPanel'
-import { PhaseTimeline } from './PhaseTimeline'
 import { QueueBrowserPanel } from './QueueBrowserPanel'
-import { RunsFilterBar } from './RunsFilterBar'
+import { AppShell } from './AppShell'
+import { RunDetailView } from './RunDetailView'
+import { ComparisonView } from './ComparisonView'
+import { RunsListView } from './RunsListView'
 import {
   RUNS_LIST_FILTERS_INIT,
   buildListRunsApiParams,
   narrowRunsOnPage,
   type RunsListServerFilters,
 } from './runsListQuery'
-import {
-  runTraceExportFilename,
-  serializeRunTraceJson,
-  triggerBrowserDownload,
-} from './exportDownload'
-import { ScoreComparisonDl } from './scoreComparisonDisplay'
 import './benchmark.css'
 
 export type View = 'run' | 'runs' | 'queue' | 'detail' | 'compare' | 'dashboard' | 'document'
 
 const RUNS_PAGE = 25
-
-function formatJson(v: unknown): string {
-  return JSON.stringify(v, null, 2)
-}
-
-function formatWhen(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString()
-  } catch {
-    return iso
-  }
-}
-
-const RUN_STATUSES = new Set([
-  'pending',
-  'running',
-  'retrieval_completed',
-  'generation_completed',
-  'completed',
-  'failed',
-])
-
-function runStageLabel(status: string): string {
-  switch (status) {
-    case 'pending':
-      return 'Queued'
-    case 'running':
-      return 'Retrieving…'
-    case 'retrieval_completed':
-      return 'Generating answer…'
-    case 'generation_completed':
-      return 'Running LLM judge…'
-    case 'completed':
-      return 'Finished'
-    case 'failed':
-      return 'Failed'
-    default:
-      return status
-  }
-}
-
-function RunStatusBadge({ status }: { status: string }) {
-  const normalized = RUN_STATUSES.has(status) ? status : 'pending'
-  const cls = `cl-run-badge cl-run-badge--${normalized.replace(/_/g, '-')}`
-  return (
-    <span className={cls} title={status}>
-      {status.replace(/_/g, ' ')}
-    </span>
-  )
-}
-
-function pipelineLabel(id: number, configs: PipelineConfig[]): string {
-  const p = configs.find((c) => c.id === id)
-  return p ? `${p.name} (#${id})` : `config #${id}`
-}
-
-function EvaluationStructured({ ev }: { ev: Record<string, unknown> | null }) {
-  if (!ev || typeof ev !== 'object') {
-    return <p className="cl-muted">No evaluation row.</p>
-  }
-  const faithfulness = ev.faithfulness
-  const completeness = ev.completeness
-  const retrieval_relevance = ev.retrieval_relevance
-  const context_coverage = ev.context_coverage
-  const groundedness = ev.groundedness
-  const failure_type = ev.failure_type
-  const used_llm_judge = ev.used_llm_judge
-  const cost_usd = ev.cost_usd
-  const meta = ev.metadata_json as Record<string, unknown> | null | undefined
-
-  return (
-    <div className="cl-eval-grid">
-      <div className="cl-eval-row">
-        <span className="cl-eval-k">Faithfulness</span>
-        <span>{faithfulness != null ? String(faithfulness) : '—'}</span>
-      </div>
-      <div className="cl-eval-row">
-        <span className="cl-eval-k">Completeness</span>
-        <span>{completeness != null ? String(completeness) : '—'}</span>
-      </div>
-      <div className="cl-eval-row">
-        <span className="cl-eval-k">Retrieval relevance</span>
-        <span>{retrieval_relevance != null ? String(retrieval_relevance) : '—'}</span>
-      </div>
-      <div className="cl-eval-row">
-        <span className="cl-eval-k">Context coverage</span>
-        <span>{context_coverage != null ? String(context_coverage) : '—'}</span>
-      </div>
-      <div className="cl-eval-row">
-        <span className="cl-eval-k">Groundedness</span>
-        <span>{groundedness != null ? String(groundedness) : '—'}</span>
-      </div>
-      <div className="cl-eval-row">
-        <span className="cl-eval-k">Failure type</span>
-        <span>
-          <strong>{failure_type != null ? String(failure_type) : '—'}</strong>
-        </span>
-      </div>
-      <div className="cl-eval-row">
-        <span className="cl-eval-k">LLM judge</span>
-        <span>{used_llm_judge === true ? 'yes' : used_llm_judge === false ? 'no' : '—'}</span>
-      </div>
-      <div className="cl-eval-row">
-        <span className="cl-eval-k">Est. cost USD</span>
-        <span>{cost_usd != null ? String(cost_usd) : '—'}</span>
-      </div>
-      {meta && Object.keys(meta).length > 0 ? (
-        <details className="cl-details">
-          <summary>Judge &amp; parse metadata</summary>
-          <dl className="cl-meta-dl">
-            {Object.entries(meta).map(([k, v]) => (
-              <div key={k}>
-                <dt>{k}</dt>
-                <dd>{typeof v === 'object' ? formatJson(v) : String(v)}</dd>
-              </div>
-            ))}
-          </dl>
-        </details>
-      ) : null}
-    </div>
-  )
-}
-
-function MetricsTable({ rows, title }: { rows: ConfigComparisonMetrics[]; title: string }) {
-  if (!rows.length) {
-    return (
-      <div className="cl-card cl-empty">
-        <p className="cl-muted">
-          No traced runs for <strong>{title}</strong> (empty bucket or no data).
-        </p>
-      </div>
-    )
-  }
-  return (
-    <div className="cl-card">
-      <h2>{title}</h2>
-      <div className="cl-table-wrap">
-        <table className="cl-table">
-          <thead>
-            <tr>
-              <th>Config</th>
-              <th>Traced</th>
-              <th>Avg ret. ms</th>
-              <th>Avg eval ms</th>
-              <th>Avg total ms</th>
-              <th>Avg rel.</th>
-              <th>Avg faith.</th>
-              <th>Avg comp.</th>
-              <th>Failure counts</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((m) => {
-              const fc = m.failure_type_counts || {}
-              const failStr =
-                Object.keys(fc).length === 0
-                  ? '—'
-                  : Object.entries(fc)
-                      .map(([k, v]) => `${k}: ${v}`)
-                      .join('; ')
-              return (
-                <tr key={m.pipeline_config_id}>
-                  <td>{m.pipeline_config_id}</td>
-                  <td>{m.traced_runs}</td>
-                  <td>{m.avg_retrieval_latency_ms?.toFixed?.(1) ?? '—'}</td>
-                  <td>{m.avg_evaluation_latency_ms?.toFixed?.(1) ?? '—'}</td>
-                  <td>{m.avg_total_latency_ms?.toFixed?.(1) ?? '—'}</td>
-                  <td>{m.avg_retrieval_relevance?.toFixed?.(3) ?? '—'}</td>
-                  <td>{m.avg_faithfulness != null ? m.avg_faithfulness.toFixed(3) : '—'}</td>
-                  <td>{m.avg_completeness != null ? m.avg_completeness.toFixed(3) : '—'}</td>
-                  <td className="cl-td-wrap">{failStr}</td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
 
 export function BenchmarkWorkspace({ routeView }: { routeView: View }) {
   const navigate = useNavigate()
@@ -652,27 +459,7 @@ export function BenchmarkWorkspace({ routeView }: { routeView: View }) {
   }
 
   return (
-    <div className="cl-app">
-      <header className="cl-header">
-        <h1>ContextLens — Benchmark</h1>
-        <nav className="cl-nav" aria-label="Main">
-          <button type="button" data-active={view === 'run'} onClick={() => goView('run')}>
-            Run benchmark
-          </button>
-          <button type="button" data-active={view === 'runs'} onClick={() => goView('runs')}>
-            Recent runs
-          </button>
-          <button type="button" data-active={view === 'detail'} onClick={() => goView('detail')}>
-            Run detail
-          </button>
-          <button type="button" data-active={view === 'compare'} onClick={() => goView('compare')}>
-            Config comparison
-          </button>
-          <button type="button" data-active={view === 'dashboard'} onClick={() => goView('dashboard')}>
-            Dashboard
-          </button>
-        </nav>
-      </header>
+    <AppShell view={view} onNavigate={goView}>
 
       {view === 'run' && !registryInitDone ? (
         <p className="cl-loading" aria-live="polite">
@@ -893,372 +680,71 @@ export function BenchmarkWorkspace({ routeView }: { routeView: View }) {
       )}
 
       {view === 'runs' && (
-        <section className="cl-card">
-          <h2>Recent runs</h2>
-          <RunsFilterBar
-            values={runsFilters}
-            narrowText={runsNarrowText}
-            onChange={(partial) => setRunsFilters((prev) => ({ ...prev, ...partial }))}
-            onNarrowTextChange={setRunsNarrowText}
-            onClear={clearRunsFilters}
-            datasets={datasets}
-            pipelineConfigs={pipelineConfigs}
-          />
-          <p className="cl-muted">
-            Showing {runsVisible.length} of {runs.length} on this page · {runsTotal} total match current filters
-            {runsNarrowText.trim() ? ' (narrow filter active on loaded rows)' : ''} · newest first
-          </p>
-          <div className="cl-actions" style={{ marginTop: 0 }}>
-            <button
-              type="button"
-              className="cl-btn cl-btn-secondary"
-              disabled={runsLoading}
-              onClick={() => {
-                clearMessages()
-                void refreshRuns()
-              }}
-            >
-              {runsLoading ? 'Loading…' : 'Refresh'}
-            </button>
-          </div>
-          {runsLoading && !runs.length ? (
-            <p className="cl-loading">Loading runs…</p>
-          ) : !runs.length ? (
-            <p className="cl-empty-banner">No runs yet. Create one from “Run benchmark”.</p>
-          ) : runsVisible.length === 0 ? (
-            <p className="cl-empty-banner" data-testid="runs-narrow-empty">
-              No runs on this page match the narrow filter. Clear it or load more rows.
-            </p>
-          ) : (
-            <div className="cl-table-wrap">
-              <table className="cl-table">
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Created</th>
-                    <th>Status</th>
-                    <th>Pipeline</th>
-                    <th>Query</th>
-                    <th>Evaluator</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {runsVisible.map((r) => (
-                    <tr key={r.run_id}>
-                      <td>{r.run_id}</td>
-                      <td>{formatWhen(r.created_at)}</td>
-                      <td>
-                        <RunStatusBadge status={r.status} />
-                      </td>
-                      <td>{pipelineLabel(r.pipeline_config_id, pipelineConfigs)}</td>
-                      <td>
-                        {r.query_text.slice(0, 40)}
-                        {r.query_text.length > 40 ? '…' : ''}
-                      </td>
-                      <td>{r.evaluator_type}</td>
-                      <td>
-                        <button
-                          type="button"
-                          className="link"
-                          onClick={() => {
-                            clearMessages()
-                            navigate(`/runs/${r.run_id}`)
-                          }}
-                        >
-                          Open
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          {runsHasMore ? (
-            <div className="cl-actions">
-              <button
-                type="button"
-                className="cl-btn cl-btn-secondary"
-                disabled={runsLoading}
-                onClick={() => void loadMoreRuns()}
-              >
-                {runsLoading ? 'Loading…' : 'Load more'}
-              </button>
-            </div>
-          ) : null}
-        </section>
+        <RunsListView
+          runs={runs}
+          runsVisible={runsVisible}
+          runsTotal={runsTotal}
+          runsHasMore={runsHasMore}
+          runsLoading={runsLoading}
+          runsFilters={runsFilters}
+          runsNarrowText={runsNarrowText}
+          datasets={datasets}
+          pipelineConfigs={pipelineConfigs}
+          onFiltersChange={(partial) => setRunsFilters((prev) => ({ ...prev, ...partial }))}
+          onNarrowTextChange={setRunsNarrowText}
+          onClearFilters={clearRunsFilters}
+          onRefresh={() => {
+            clearMessages()
+            void refreshRuns()
+          }}
+          onLoadMore={() => void loadMoreRuns()}
+          onOpenRun={(runId) => {
+            clearMessages()
+            navigate(`/runs/${runId}`)
+          }}
+        />
       )}
 
       {view === 'detail' && (
-        <section className="cl-card">
-          <h2>Run detail</h2>
-          <div className="cl-field">
-            <label htmlFor="rid">Run ID</label>
-            <input
-              id="rid"
-              type="text"
-              inputMode="numeric"
-              placeholder="e.g. 42"
-              value={detailRunId ?? ''}
-              onChange={(ev) => {
-                const t = ev.target.value.trim()
-                if (t === '') {
-                  setDetailRunId(null)
-                  navigate('/runs', { replace: true })
-                  return
-                }
-                const n = Number(t)
-                if (Number.isFinite(n) && Number.isInteger(n) && n > 0) {
-                  setDetailRunId(n)
-                  navigate(`/runs/${n}`, { replace: true })
-                } else {
-                  setDetailRunId(null)
-                }
-              }}
-            />
-          </div>
-          {params.runId != null && (detailRunId == null || !Number.isFinite(detailRunId)) ? (
-            <p className="cl-msg cl-msg-error" role="alert">
-              Invalid run ID: &quot;{params.runId}&quot;. Run IDs must be positive integers.
-            </p>
-          ) : detailLoading ? (
-            <p className="cl-loading">Loading run…</p>
-          ) : runDetail ? (
-            <>
-              <section className="cl-subsection">
-                <div className="cl-subsection-header-row">
-                  <h3>Summary</h3>
-                  <button
-                    type="button"
-                    className="cl-btn cl-btn-secondary cl-btn-sm"
-                    data-testid="run-export-json"
-                    onClick={() => {
-                      triggerBrowserDownload(
-                        runTraceExportFilename(runDetail.run_id),
-                        serializeRunTraceJson(runDetail),
-                        'application/json',
-                      )
-                    }}
-                  >
-                    Export JSON
-                  </button>
-                </div>
-                <p className="cl-muted cl-detail-status-row">
-                  <RunStatusBadge status={runDetail.status} />
-                  <span className="cl-stage-label">
-                    Stage: <strong>{runStageLabel(runDetail.status)}</strong>
-                  </span>
-                  {runDetail.status !== 'completed' && runDetail.status !== 'failed' ? (
-                    <span className="cl-pulse" aria-live="polite">
-                      Updating…
-                    </span>
-                  ) : null}
-                </p>
-                <p className="cl-muted">
-                  Evaluator <strong>{runDetail.evaluator_type}</strong> · created{' '}
-                  {formatWhen(runDetail.created_at)}
-                </p>
-              </section>
-
-              <PhaseTimeline runDetail={runDetail} />
-
-              <DiagnosisTimingExperimentPanel
-                runId={runDetail.run_id}
-                onModeChange={setDiagnosisExperimentMode}
-              />
-
-              {diagnosisExperimentMode === 'manual' ? (
-                <p className="cl-msg cl-msg-warn" role="note">
-                  Manual baseline mode: assisted diagnosis summaries and panels are hidden while you time
-                  unaided triage.
-                </p>
-              ) : (
-                <RunDiagnosisSummary runDetail={runDetail} />
-              )}
-
-              {runDetail.run_id === detailRunId ? (
-                <RunQueuePanel
-                  key={runDetail.run_id}
-                  runId={runDetail.run_id}
-                  runStatus={runDetail.status}
-                />
-              ) : null}
-
-              <section className="cl-subsection">
-                <h3>Query</h3>
-                <p>{runDetail.query_case.query_text}</p>
-                {runDetail.query_case.expected_answer ? (
-                  <p className="cl-muted">
-                    <em>Expected:</em> {runDetail.query_case.expected_answer}
-                  </p>
-                ) : null}
-              </section>
-
-              <section className="cl-subsection">
-                <h3>Pipeline config</h3>
-                <p>
-                  <strong>{runDetail.pipeline_config.name}</strong> (id {runDetail.pipeline_config.id}) ·{' '}
-                  {runDetail.pipeline_config.embedding_model} · {runDetail.pipeline_config.chunk_strategy} ·
-                  top_k {runDetail.pipeline_config.top_k}
-                </p>
-              </section>
-
-              {diagnosisExperimentMode !== 'manual' ? (
-                <div className="cl-diagnosis-stack">
-                  <RetrievalDiagnosisPanel runDetail={runDetail} />
-                  <ContextQualityPanel runDetail={runDetail} />
-                </div>
-              ) : null}
-
-              <RetrievalHitsSection
-                hits={runDetail.retrieval_hits}
-                documentTitleById={documentTitleById}
-              />
-
-              {diagnosisExperimentMode !== 'manual' ? (
-                <GenerationJudgeInsightsPanel runDetail={runDetail} />
-              ) : null}
-
-              <RunDiffPanel baseRun={runDetail} />
-
-              <section className="cl-subsection">
-                <h3>Generation</h3>
-                {runDetail.generation && typeof runDetail.generation.answer_text === 'string' ? (
-                  <pre className="cl-pre">{String(runDetail.generation.answer_text)}</pre>
-                ) : runDetail.generation ? (
-                  <details className="cl-details">
-                    <summary>Raw generation JSON</summary>
-                    <pre className="cl-pre">{formatJson(runDetail.generation)}</pre>
-                  </details>
-                ) : (
-                  <p className="cl-muted">No generation (heuristic path).</p>
-                )}
-              </section>
-
-              <section className="cl-subsection">
-                <h3>Evaluation</h3>
-                <EvaluationStructured ev={runDetail.evaluation} />
-                <details className="cl-details">
-                  <summary>Raw evaluation JSON (debug)</summary>
-                  <pre className="cl-pre">{formatJson(runDetail.evaluation)}</pre>
-                </details>
-              </section>
-            </>
-          ) : (
-            <p className="cl-muted">Enter a run id or open a row from “Recent runs”.</p>
-          )}
-        </section>
+        <RunDetailView
+          routeRunId={params.runId}
+          detailRunId={detailRunId}
+          runDetail={runDetail}
+          detailLoading={detailLoading}
+          diagnosisExperimentMode={diagnosisExperimentMode}
+          documentTitleById={documentTitleById}
+          onDiagnosisModeChange={setDiagnosisExperimentMode}
+          onRunIdInputChange={(raw) => {
+            const t = raw.trim()
+            if (t === '') {
+              setDetailRunId(null)
+              navigate('/runs', { replace: true })
+              return
+            }
+            const n = Number(t)
+            if (Number.isFinite(n) && Number.isInteger(n) && n > 0) {
+              setDetailRunId(n)
+              navigate(`/runs/${n}`, { replace: true })
+            } else {
+              setDetailRunId(null)
+            }
+          }}
+        />
       )}
 
       {view === 'compare' && (
-        <section>
-          <div className="cl-card">
-            <h2>Config comparison</h2>
-            <p className="cl-muted">
-              Uses <code>GET /runs/config-comparison</code>. Heuristic and LLM buckets stay separate when you
-              choose “Both”.
-            </p>
-
-            {registryLoading ? (
-              <p className="cl-loading">Loading pipeline configs…</p>
-            ) : null}
-
-            {!pipelineConfigs.length && !registryLoading ? (
-              <p className="cl-empty-banner">No pipeline configs loaded. Reload registry from “Run benchmark”.</p>
-            ) : null}
-
-            <div className="cl-field">
-              <label htmlFor="cev">Evaluator slice</label>
-              <select
-                id="cev"
-                value={compareEvaluator}
-                onChange={(ev) =>
-                  setCompareEvaluator(ev.target.value as 'heuristic' | 'llm' | 'both')
-                }
-              >
-                <option value="both">Both (separate tables: heuristic + LLM)</option>
-                <option value="heuristic">Heuristic only</option>
-                <option value="llm">LLM only</option>
-              </select>
-            </div>
-
-            <h3 className="cl-h3-muted">Pipeline configs</h3>
-            {pipelineConfigs.map((p) => (
-              <div key={p.id} className="cl-check">
-                <input
-                  type="checkbox"
-                  id={`cmp-${p.id}`}
-                  checked={compareSelected.has(p.id)}
-                  onChange={() => toggleCompare(p.id)}
-                />
-                <label htmlFor={`cmp-${p.id}`}>
-                  {p.name} (id {p.id}) — top_k {p.top_k}
-                </label>
-              </div>
-            ))}
-
-            <div className="cl-actions">
-              <button
-                type="button"
-                className="cl-btn"
-                disabled={compareLoading || !compareSelected.size}
-                onClick={() => void handleCompare()}
-              >
-                {compareLoading ? 'Loading…' : 'Compare'}
-              </button>
-              <button
-                type="button"
-                className="cl-btn cl-btn-secondary"
-                disabled={registryLoading}
-                onClick={() => void loadRegistry({ preserveSelection: true })}
-              >
-                Reload configs
-              </button>
-            </div>
-          </div>
-
-          {compareResult?.buckets ? (
-            <div className="cl-compare-grid">
-              <div className="cl-compare-column">
-                <MetricsTable rows={compareResult.buckets.heuristic ?? []} title="Heuristic bucket" />
-                {compareResult.score_comparison_buckets?.heuristic ? (
-                  <div className="cl-card">
-                    <h3 className="cl-h3-muted">Heuristic — best vs worst (avg scores)</h3>
-                    <ScoreComparisonDl
-                      summary={compareResult.score_comparison_buckets.heuristic}
-                      metricsRows={compareResult.buckets.heuristic ?? []}
-                    />
-                  </div>
-                ) : null}
-              </div>
-              <div className="cl-compare-column">
-                <MetricsTable rows={compareResult.buckets.llm ?? []} title="LLM bucket" />
-                {compareResult.score_comparison_buckets?.llm ? (
-                  <div className="cl-card">
-                    <h3 className="cl-h3-muted">LLM — best vs worst (avg scores)</h3>
-                    <ScoreComparisonDl summary={compareResult.score_comparison_buckets.llm} />
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          ) : compareResult?.configs ? (
-            <div className="cl-compare-column">
-              <MetricsTable rows={compareResult.configs} title="Combined (heuristic + LLM merged)" />
-              {compareResult.score_comparison ? (
-                <div className="cl-card">
-                  <h3 className="cl-h3-muted">Combined — best vs worst (avg scores)</h3>
-                  <ScoreComparisonDl
-                    summary={compareResult.score_comparison}
-                    metricsRows={compareResult.configs}
-                  />
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <p className="cl-muted cl-card cl-empty">Run Compare to load aggregates.</p>
-          )}
-        </section>
+        <ComparisonView
+          pipelineConfigs={pipelineConfigs}
+          registryLoading={registryLoading}
+          compareEvaluator={compareEvaluator}
+          compareSelected={compareSelected}
+          compareLoading={compareLoading}
+          compareResult={compareResult}
+          onEvaluatorChange={setCompareEvaluator}
+          onToggleCompare={toggleCompare}
+          onCompare={() => void handleCompare()}
+          onReloadRegistry={() => void loadRegistry({ preserveSelection: true })}
+        />
       )}
 
       {view === 'dashboard' && (
@@ -1279,6 +765,6 @@ export function BenchmarkWorkspace({ routeView }: { routeView: View }) {
       )}
 
       {view === 'document' && <DocumentDetailPanel />}
-    </div>
+    </AppShell>
   )
 }
