@@ -42,9 +42,10 @@ services:
     rootDir: backend
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
-    # Free instances don't support preDeployCommand, so run migrations at startup
-    # before launching uvicorn. (CREATE EXTENSION vector runs inside Alembic.)
-    dockerCommand: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    # Free instances don't support preDeployCommand, so migrations run at startup
+    # inside this script before launching uvicorn (Render parses dockerCommand as
+    # tokens, so a `sh -c "... && ..."` one-liner won't work — use a script).
+    dockerCommand: ./scripts/start_api.sh
     envVars:
       - key: DATABASE_URL
         fromDatabase:

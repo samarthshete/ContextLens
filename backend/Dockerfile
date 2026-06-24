@@ -18,7 +18,7 @@ COPY alembic ./alembic
 COPY scripts ./scripts
 COPY tests ./tests
 
-RUN chmod +x scripts/rq_worker.sh
+RUN chmod +x scripts/rq_worker.sh scripts/start_api.sh
 
 # Install package + all [project] dependencies from pyproject.toml (includes ``openai``).
 # Also install [dev] extras so ``pytest`` can run inside the container.
